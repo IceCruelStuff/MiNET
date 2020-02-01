@@ -24,6 +24,7 @@
 #endregion
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -459,8 +460,12 @@ namespace MiNET.Net
 					Write(record.ClientUuid);
 					WriteSignedVarLong(record.EntityId);
 					Write(record.DisplayName ?? record.Username);
-					Write(record.Skin, record?.PlayerInfo?.CertificateData?.ExtraData?.Xuid);
+					Write(record.PlayerInfo.CertificateData?.ExtraData?.Xuid ?? String.Empty);
 					Write(record.PlayerInfo.PlatformChatId);
+					Write(record.PlayerInfo.DeviceOS);
+					Write(record.Skin);
+					Write(false); // is teacher
+					Write(false); // is host
 				}
 			}
 			else if (records is PlayerRemoveRecords)
@@ -491,8 +496,13 @@ namespace MiNET.Net
 						player.ClientUuid = ReadUUID();
 						player.EntityId = ReadSignedVarLong();
 						player.DisplayName = ReadString();
+						ReadString(); // TODO: xuid
+						var platformChatId = ReadString(); // TODO: platform chat ID
+						ReadInt(); // TODO: device os
 						player.Skin = ReadSkin();
-						var platformChatId = ReadString(); //TODO: platform chat ID
+						ReadBool(); // is teacher
+						ReadBool(); // is host
+
 						records.Add(player);
 						Log.Warn($"Reading {player.ClientUuid}, {player.EntityId}, '{player.DisplayName}', {platformChatId}");
 					}
@@ -565,7 +575,7 @@ namespace MiNET.Net
 				var parts = endpoint.Address.ToString().Split('.');
 				foreach (var part in parts)
 				{
-					Write((byte) byte.Parse(part));
+					Write((byte) ~byte.Parse(part));
 				}
 				Write((short) endpoint.Port, true);
 			}
@@ -594,7 +604,7 @@ namespace MiNET.Net
 
 			if (ipVersion == 4)
 			{
-				string ipAddress = $"{ReadByte()}.{ReadByte()}.{ReadByte()}.{ReadByte()}";
+				string ipAddress = $"{(byte) ~ReadByte()}.{(byte) ~ReadByte()}.{(byte) ~ReadByte()}.{(byte) ~ReadByte()}";
 				address = IPAddress.Parse(ipAddress);
 				port = (ushort) ReadShort(true);
 			}
@@ -742,32 +752,50 @@ namespace MiNET.Net
 			return metadata;
 		}
 
-		public void Write(Transaction trans)
+		public void Write(Transaction transaction)
 		{
-			WriteVarInt((int) trans.TransactionType);
-			WriteUnsignedVarInt((uint) trans.Transactions.Count);
-			foreach (var record in trans.Transactions)
+			switch (transaction)
 			{
-				if (record is ContainerTransactionRecord)
+				case InventoryMismatchTransaction _:
+					WriteVarInt((int) McpeInventoryTransaction.TransactionType.InventoryMismatch);
+					break;
+				case ItemReleaseTransaction _:
+					WriteVarInt((int) McpeInventoryTransaction.TransactionType.ItemRelease);
+					break;
+				case ItemUseOnEntityTransaction _:
+					WriteVarInt((int) McpeInventoryTransaction.TransactionType.ItemUseOnEntity);
+					break;
+				case ItemUseTransaction _:
+					WriteVarInt((int) McpeInventoryTransaction.TransactionType.ItemUse);
+					break;
+				case NormalTransaction _:
+					WriteVarInt((int) McpeInventoryTransaction.TransactionType.Normal);
+					break;
+			}
+
+			WriteUnsignedVarInt((uint) transaction.TransactionRecords.Count);
+			foreach (var record in transaction.TransactionRecords)
+			{
+				switch (record)
 				{
-					var r = record as ContainerTransactionRecord;
-					WriteSignedVarInt(r.InventoryId);
-				}
-				else if (record is GlobalTransactionRecord)
-				{
-				}
-				else if (record is WorldInteractionTransactionRecord)
-				{
-					var r = record as WorldInteractionTransactionRecord;
-					WriteVarInt(r.Flags);
-				}
-				else if (record is CreativeTransactionRecord)
-				{
-				}
-				else if (record is CraftTransactionRecord)
-				{
-					var r = record as CraftTransactionRecord;
-					WriteVarInt(r.Action);
+					case ContainerTransactionRecord r:
+						WriteVarInt((int) McpeInventoryTransaction.InventorySourceType.Container);
+						WriteSignedVarInt(r.InventoryId);
+						break;
+					case GlobalTransactionRecord _:
+						WriteVarInt((int) McpeInventoryTransaction.InventorySourceType.Global);
+						break;
+					case WorldInteractionTransactionRecord r:
+						WriteVarInt((int) McpeInventoryTransaction.InventorySourceType.WorldInteraction);
+						WriteVarInt(r.Flags);
+						break;
+					case CreativeTransactionRecord _:
+						WriteVarInt((int) McpeInventoryTransaction.InventorySourceType.Creative);
+						break;
+					case CraftTransactionRecord r:
+						WriteVarInt((int) McpeInventoryTransaction.InventorySourceType.Crafting);
+						WriteVarInt((int) r.Action);
+						break;
 				}
 
 				WriteVarInt(record.Slot);
@@ -775,34 +803,34 @@ namespace MiNET.Net
 				Write(record.NewItem);
 			}
 
-			switch (trans.TransactionType)
+			switch (transaction)
 			{
-				case McpeInventoryTransaction.TransactionType.Normal:
-				case McpeInventoryTransaction.TransactionType.InventoryMismatch:
+				case NormalTransaction _:
+				case InventoryMismatchTransaction _:
 					break;
-				case McpeInventoryTransaction.TransactionType.ItemUse:
-					WriteVarInt(trans.ActionType);
-					Write(trans.Position);
-					WriteSignedVarInt(trans.Face);
-					WriteSignedVarInt(trans.Slot);
-					Write(trans.Item);
-					Write(trans.FromPosition);
-					Write(trans.ClickPosition);
-					WriteUnsignedVarInt(trans.BlockRuntimeId);
+				case ItemUseTransaction t:
+					WriteVarInt((int)t.ActionType);
+					Write(t.Position);
+					WriteSignedVarInt(t.Face);
+					WriteSignedVarInt(t.Slot);
+					Write(t.Item);
+					Write(t.FromPosition);
+					Write(t.ClickPosition);
+					WriteUnsignedVarInt(t.BlockRuntimeId);
 					break;
-				case McpeInventoryTransaction.TransactionType.ItemUseOnEntity:
-					WriteVarLong(trans.EntityId);
-					WriteVarInt(trans.ActionType);
-					WriteSignedVarInt(trans.Slot);
-					Write(trans.Item);
-					Write(trans.FromPosition);
-					Write(trans.ClickPosition);
+				case ItemUseOnEntityTransaction t:
+					WriteVarLong(t.EntityId);
+					WriteVarInt((int) t.ActionType);
+					WriteSignedVarInt(t.Slot);
+					Write(t.Item);
+					Write(t.FromPosition);
+					Write(t.ClickPosition);
 					break;
-				case McpeInventoryTransaction.TransactionType.ItemRelease:
-					WriteVarInt(trans.ActionType);
-					WriteSignedVarInt(trans.Slot);
-					Write(trans.Item);
-					Write(trans.FromPosition);
+				case ItemReleaseTransaction t:
+					WriteVarInt((int) t.ActionType);
+					WriteSignedVarInt(t.Slot);
+					Write(t.Item);
+					Write(t.FromPosition);
 					break;
 				default:
 					break;
@@ -811,41 +839,33 @@ namespace MiNET.Net
 
 		public Transaction ReadTransaction()
 		{
-			var trans = new Transaction();
-
-			trans.TransactionType = (McpeInventoryTransaction.TransactionType) ReadVarInt();
-
+			var transactions = new List<TransactionRecord>();
+			var transactionType = (McpeInventoryTransaction.TransactionType) ReadVarInt();
 			var count = ReadUnsignedVarInt();
 			for (int i = 0; i < count; i++)
 			{
-				TransactionRecord record = null;
+				TransactionRecord record;
 				int sourceType = ReadVarInt();
 				switch ((McpeInventoryTransaction.InventorySourceType) sourceType)
 				{
 					case McpeInventoryTransaction.InventorySourceType.Container:
 						record = new ContainerTransactionRecord()
 						{
-							Source = sourceType,
 							InventoryId = ReadSignedVarInt()
 						};
 						break;
 					case McpeInventoryTransaction.InventorySourceType.Global:
-						record = new GlobalTransactionRecord()
-						{
-							Source = sourceType,
-						};
+						record = new GlobalTransactionRecord();
 						break;
 					case McpeInventoryTransaction.InventorySourceType.WorldInteraction:
 						record = new WorldInteractionTransactionRecord()
 						{
-							Source = sourceType,
 							Flags = ReadVarInt()
 						};
 						break;
 					case McpeInventoryTransaction.InventorySourceType.Creative:
 						record = new CreativeTransactionRecord()
 						{
-							Source = sourceType,
 							InventoryId = 0x79
 						};
 						break;
@@ -853,8 +873,7 @@ namespace MiNET.Net
 					case McpeInventoryTransaction.InventorySourceType.Crafting:
 						record = new CraftTransactionRecord()
 						{
-							Source = sourceType,
-							Action = ReadSignedVarInt()
+							Action = (McpeInventoryTransaction.CraftingAction) ReadSignedVarInt()
 						};
 						break;
 					default:
@@ -865,43 +884,57 @@ namespace MiNET.Net
 				record.Slot = ReadVarInt();
 				record.OldItem = ReadItem();
 				record.NewItem = ReadItem();
-				trans.Transactions.Add(record);
+				transactions.Add(record);
 			}
 
-			switch (trans.TransactionType)
+			Transaction transaction = null;
+			switch (transactionType)
 			{
 				case McpeInventoryTransaction.TransactionType.Normal:
+					transaction = new NormalTransaction();
+					break;
 				case McpeInventoryTransaction.TransactionType.InventoryMismatch:
+					transaction = new InventoryMismatchTransaction();
 					break;
 				case McpeInventoryTransaction.TransactionType.ItemUse:
-					trans.ActionType = ReadVarInt();
-					trans.Position = ReadBlockCoordinates();
-					trans.Face = ReadSignedVarInt();
-					trans.Slot = ReadSignedVarInt();
-					trans.Item = ReadItem();
-					trans.FromPosition = ReadVector3();
-					trans.ClickPosition = ReadVector3();
-					trans.BlockRuntimeId = ReadUnsignedVarInt();
+					transaction = new ItemUseTransaction()
+					{
+						ActionType = (McpeInventoryTransaction.ItemUseAction) ReadVarInt(),
+						Position = ReadBlockCoordinates(),
+						Face = ReadSignedVarInt(),
+						Slot = ReadSignedVarInt(),
+						Item = ReadItem(),
+						FromPosition = ReadVector3(),
+						ClickPosition = ReadVector3(),
+						BlockRuntimeId = ReadUnsignedVarInt()
+					};
 					break;
 				case McpeInventoryTransaction.TransactionType.ItemUseOnEntity:
-					trans.EntityId = ReadVarLong();
-					trans.ActionType = ReadVarInt();
-					trans.Slot = ReadSignedVarInt();
-					trans.Item = ReadItem();
-					trans.FromPosition = ReadVector3();
-					trans.ClickPosition = ReadVector3();
+					transaction = new ItemUseOnEntityTransaction()
+					{
+
+						EntityId = ReadVarLong(),
+						ActionType = (McpeInventoryTransaction.ItemUseOnEntityAction) ReadVarInt(),
+						Slot = ReadSignedVarInt(),
+						Item = ReadItem(),
+						FromPosition = ReadVector3(),
+						ClickPosition = ReadVector3()
+					};
 					break;
 				case McpeInventoryTransaction.TransactionType.ItemRelease:
-					trans.ActionType = ReadVarInt();
-					trans.Slot = ReadSignedVarInt();
-					trans.Item = ReadItem();
-					trans.FromPosition = ReadVector3();
-					break;
-				default:
+					transaction = new ItemReleaseTransaction()
+					{
+						ActionType = (McpeInventoryTransaction.ItemReleaseAction) ReadVarInt(),
+						Slot = ReadSignedVarInt(),
+						Item = ReadItem(),
+						FromPosition = ReadVector3()
+					};
 					break;
 			}
 
-			return trans;
+			transaction.TransactionRecords = transactions;
+
+			return transaction;
 		}
 
 		public void Write(Item stack)
@@ -956,7 +989,7 @@ namespace MiNET.Net
 			ushort nbtLen = _reader.ReadUInt16(); // NbtLen
 			if (nbtLen == 0xffff && ReadByte() == 1)
 			{
-				stack.ExtraData = ReadNbt().NbtFile.RootTag;
+				stack.ExtraData = (NbtCompound) ReadNbt().NbtFile.RootTag;
 			}
 
 			var canPlace = ReadSignedVarInt();
@@ -1174,41 +1207,65 @@ namespace MiNET.Net
 			}
 		}
 
-		public Blockstates ReadBlockstates()
+		public BlockPallet ReadBlockPallet()
 		{
-			var result = new Blockstates();
-			uint count = ReadUnsignedVarInt();
-			for (int runtimeId = 0; runtimeId < count; runtimeId++)
+			var result = new BlockPallet();
+
+			var nbt = new Nbt();
+			var file = new NbtFile();
+			file.BigEndian = false;
+			file.UseVarInt = true;
+			file.AllowAlternativeRootTag = true;
+			nbt.NbtFile = file;
+			file.LoadFromStream(_writer.BaseStream, NbtCompression.None);
+
+			int runtimeId = 0;
+			var rootTag = (NbtList) file.RootTag;
+			foreach (NbtTag tag in rootTag)
 			{
-				var name = ReadString();
-				var data = ReadShort();
-				var legacyId = ReadShort();
-				result.Add(runtimeId, new Blockstate
+				var record = new BlockRecord();
+				record.RuntimeId = runtimeId++;
+				record.Id = tag["id"].ShortValue;
+
+				var blockTag = (NbtCompound) tag["block"];
+				record.Name = blockTag["name"].StringValue;
+				if(blockTag.Contains("data")) record.Data = blockTag["data"].ShortValue;
+
+				record.States = new List<BlockState>();
+				var states = (NbtCompound) blockTag["states"];
+				foreach (NbtTag stateTag in states)
 				{
-					Id = legacyId,
-					RuntimeId = runtimeId,
-					Name = name,
-					Data = data
-				});
+					var state = new BlockState();
+					state.Name = stateTag.Name;
+					switch (stateTag.TagType)
+					{
+						case NbtTagType.Byte:
+							state.Type = (byte) NbtTagType.Byte;
+							state.Value = stateTag.ByteValue.ToString();
+							break;
+						case NbtTagType.Int:
+							state.Type = (byte) NbtTagType.Int;
+							state.Value = stateTag.IntValue.ToString();
+							break;
+						case NbtTagType.String:
+							state.Type = (byte) NbtTagType.String;
+							state.Value = stateTag.StringValue.ToString();
+							break;
+						default:
+							throw new ArgumentOutOfRangeException();
+					}
+					record.States.Add(state);
+				}
+
+				result.Add(record);
 			}
 
 			return result;
 		}
 
-		public void Write(Blockstates blockstates)
+		public void Write(BlockPallet blockPallet)
 		{
-			if (blockstates == null)
-			{
-				WriteUnsignedVarInt(0);
-				return;
-			}
-			WriteUnsignedVarInt((uint) blockstates.Count);
-			foreach (var blockstate in blockstates.OrderBy(kvp => kvp.Key))
-			{
-				Write(blockstate.Value.Name);
-				Write(blockstate.Value.Data);
-				Write((short) blockstate.Value.Id);
-			}
+			Write((byte[]) blockPallet);
 		}
 
 		public void Write(Links links)
@@ -1389,17 +1446,41 @@ namespace MiNET.Net
 			return ids;
 		}
 
-		public void Write(Skin skin, string xuid = null)
+		public void Write(Skin skin)
 		{
-			//skin.SkinGeometryName = "gurun";
-			//skin.SkinGeometry = Encoding.UTF8.GetBytes(File.ReadAllText(@"D:\Temp\humanoid.json"));
-
 			Write(skin.SkinId);
-			WriteByteArray(skin.SkinData);
-			WriteByteArray(skin.CapeData);
-			Write(skin.SkinGeometryName);
-			Write(skin.SkinGeometry);
-			Write(xuid);
+			Write(skin.ResourcePatch);
+			Write(skin.Width);
+			Write(skin.Height);
+			WriteByteArray(skin.Data);
+
+			if (skin.Animations?.Count > 0)
+			{
+				Write(skin.Animations.Count);
+				foreach (Animation animation in skin.Animations)
+				{
+					Write(animation.ImageWidth);
+					Write(animation.ImageHeight);
+					WriteByteArray(animation.Image);
+					Write(animation.Type);
+					Write(animation.FrameCount);
+				}
+			}
+			else
+			{
+				Write(0);
+			}
+
+			Write(skin.Cape.ImageWidth);
+			Write(skin.Cape.ImageHeight);
+			WriteByteArray(skin.Cape.Data);
+			Write(skin.GeometryData);
+			Write(skin.AnimationData);
+			Write(skin.IsPremiumSkin);
+			Write(skin.IsPersonaSkin);
+			Write(skin.Cape.OnClassicSkin);
+			Write(skin.Cape.Id);
+			Write(skin.SkinId + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); // some unique skin id
 		}
 
 		public Skin ReadSkin()
@@ -1407,22 +1488,43 @@ namespace MiNET.Net
 			Skin skin = new Skin();
 
 			skin.SkinId = ReadString();
+			skin.ResourcePatch = ReadString();
+			skin.Width = ReadInt();
+			skin.Height = ReadInt();
+			skin.Data = ReadByteArray(false);
+
+			int animationCount = ReadInt();
+			for (int i = 0; i < animationCount; i++)
+			{
+				skin.Animations.Add(
+					new Animation()
+					{
+						ImageWidth = ReadInt(),
+						ImageHeight = ReadInt(),
+						Image = ReadByteArray(false),
+						Type = ReadInt(),
+						FrameCount = ReadFloat(),
+					}
+				);
+			}
+
+			skin.Cape.ImageWidth = ReadInt();
+			skin.Cape.ImageHeight = ReadInt();
+			skin.Cape.Data = ReadByteArray(false);
+			skin.GeometryData = ReadString();
+			skin.AnimationData = ReadString();
+			skin.IsPremiumSkin = ReadBool();
+			skin.IsPersonaSkin = ReadBool();
+			skin.Cape.OnClassicSkin = ReadBool();
+			skin.Cape.Id = ReadString();
+			ReadString(); // some unique skin id
+
 			Log.Debug($"SkinId={skin.SkinId}");
-
-			skin.SkinData = ReadByteArray(false);
-			Log.Debug($"SkinData lenght={skin.SkinData.Length}");
-
-			skin.CapeData = ReadByteArray(false);
-			Log.Debug($"CapeData lenght={skin.CapeData.Length}");
-			Log.Debug("\n" + HexDump(skin.CapeData));
-
-			skin.SkinGeometryName = ReadString();
-			Log.Debug($"SkinGeometryName={skin.SkinGeometryName}");
-
-			skin.SkinGeometry = ReadString();
-			Log.Debug($"SkinGeometry lenght={skin.SkinGeometry.Length}");
-
-			Log.Debug("XUID=" + ReadString());
+			Log.Debug($"SkinData lenght={skin.Data.Length}");
+			Log.Debug($"CapeData lenght={skin.Cape.Data.Length}");
+			Log.Debug("\n" + HexDump(skin.Cape.Data));
+			Log.Debug($"SkinGeometryName={skin.GeometryName}");
+			Log.Debug($"SkinGeometry lenght={skin.GeometryData.Length}");
 
 			return skin;
 		}
@@ -1442,63 +1544,79 @@ namespace MiNET.Net
 
 			foreach (Recipe recipe in recipes)
 			{
-				if (recipe is ShapelessRecipe)
+				switch (recipe)
 				{
-					WriteSignedVarInt(0); // Type
-
-					ShapelessRecipe rec = (ShapelessRecipe) recipe;
-					WriteVarInt(rec.Input.Count);
-					foreach (Item stack in rec.Input)
+					case ShapelessRecipe shapelessRecipe:
 					{
-						Write(stack);
-					}
-					WriteVarInt(1);
-					Write(rec.Result);
-					Write(new UUID(Guid.NewGuid().ToString()));
-					Write(rec.Block);
-				}
-				else if (recipe is ShapedRecipe)
-				{
-					WriteSignedVarInt(1); // Type
+						WriteSignedVarInt(Shapeless); // Type
 
-					ShapedRecipe rec = (ShapedRecipe) recipe;
-					WriteSignedVarInt(rec.Width);
-					WriteSignedVarInt(rec.Height);
-
-					for (int w = 0; w < rec.Width; w++)
-					{
-						for (int h = 0; h < rec.Height; h++)
+						var rec = shapelessRecipe;
+						Write(rec.Id.ToString());
+						WriteVarInt(rec.Input.Count);
+						foreach (Item stack in rec.Input)
 						{
-							Write(rec.Input[(h * rec.Width) + w]);
+							WriteRecipeIngredient(stack);
 						}
+						WriteVarInt(rec.Result.Count);
+						foreach (Item item in rec.Result)
+						{
+							Write(item);
+						}
+						Write(rec.Id);
+						Write(rec.Block);
+						WriteSignedVarInt(0); // priority
+						break;
 					}
-					WriteVarInt(1);
-					Write(rec.Result);
-					Write(new UUID(Guid.NewGuid().ToString()));
-					Write(rec.Block);
-				}
-				else if (recipe is SmeltingRecipe)
-				{
-					SmeltingRecipe rec = (SmeltingRecipe) recipe;
-					WriteSignedVarInt(rec.Input.Metadata == 0 ? 2 : 3); // Type
-					WriteSignedVarInt(rec.Input.Id);
-					if (rec.Input.Metadata != 0) WriteSignedVarInt(rec.Input.Metadata);
-					Write(rec.Result);
-					Write(rec.Block);
-				}
-				else if (recipe is MultiRecipe)
-				{
-					WriteSignedVarInt(Multi); // Type
-					Write(recipe.Id);
+					case ShapedRecipe shapedRecipe:
+					{
+						WriteSignedVarInt(Shaped); // Type
+
+						var rec = shapedRecipe;
+						Write(rec.Id.ToString());
+						WriteSignedVarInt(rec.Width);
+						WriteSignedVarInt(rec.Height);
+
+						for (int w = 0; w < rec.Width; w++)
+						{
+							for (int h = 0; h < rec.Height; h++)
+							{
+								WriteRecipeIngredient(rec.Input[(h * rec.Width) + w]);
+							}
+						}
+						WriteVarInt(rec.Result.Count);
+						foreach (Item item in rec.Result)
+						{
+							Write(item);
+						}
+						Write(rec.Id);
+						Write(rec.Block);
+						WriteSignedVarInt(0); // priority
+						break;
+					}
+					case SmeltingRecipe smeltingRecipe:
+					{
+						var rec = smeltingRecipe;
+						WriteSignedVarInt(rec.Input.Metadata == 0 ? Furnace : FurnaceData); // Type
+						WriteSignedVarInt(rec.Input.Id);
+						if (rec.Input.Metadata != 0)
+						{
+							WriteSignedVarInt(rec.Input.Metadata);
+						}
+						Write(rec.Result);
+						Write(rec.Block);
+						break;
+					}
+					case MultiRecipe _:
+						WriteSignedVarInt(Multi); // Type
+						Write(recipe.Id);
+						break;
 				}
 			}
-
-			Write((byte) 1);
 		}
 
 		public Recipes ReadRecipes()
 		{
-			Recipes recipes = new Recipes();
+			var recipes = new Recipes();
 
 			int count = (int) ReadUnsignedVarInt();
 
@@ -1506,7 +1624,7 @@ namespace MiNET.Net
 
 			for (int i = 0; i < count; i++)
 			{
-				int recipeType = (int) ReadSignedVarInt();
+				int recipeType = ReadSignedVarInt();
 
 				//Log.Error($"Read recipe no={i} type={recipeType}");
 
@@ -1516,129 +1634,217 @@ namespace MiNET.Net
 					break;
 				}
 
-				if (recipeType == Shapeless || recipeType == ShulkerBox)
+				switch (recipeType)
 				{
-					ShapelessRecipe recipe = new ShapelessRecipe();
-					int ingrediensCount = ReadVarInt(); // 
-					for (int j = 0; j < ingrediensCount; j++)
+					case Shapeless:
+					case ShulkerBox:
 					{
-						recipe.Input.Add(ReadItem());
-					}
-					ReadVarInt(); // 1?
-					recipe.Result = ReadItem();
-					recipe.Id = ReadUUID(); // Id
-					recipe.Block = ReadString(); // block?
-					recipes.Add(recipe);
-					//Log.Error("Read shapeless recipe");
-				}
-				else if (recipeType == Shaped)
-				{
-					int width = ReadSignedVarInt(); // Width
-					int height = ReadSignedVarInt(); // Height
-					ShapedRecipe recipe = new ShapedRecipe(width, height);
-					if (width > 3 || height > 3) throw new Exception("Wrong number of ingredience. Width=" + width + ", height=" + height);
-					for (int w = 0; w < width; w++)
-					{
-						for (int h = 0; h < height; h++)
+						var recipe = new ShapelessRecipe();
+						ReadString(); // some unique id
+						int ingrediensCount = ReadVarInt(); // 
+						for (int j = 0; j < ingrediensCount; j++)
 						{
-							recipe.Input[(h * width) + w] = ReadItem();
+							recipe.Input.Add(ReadRecipeIngredient());
 						}
+						int resultCount = ReadVarInt(); // 1?
+						for (int j = 0; j < resultCount; j++)
+						{
+							recipe.Result.Add(ReadItem());
+						}
+						recipe.Id = ReadUUID(); // Id
+						recipe.Block = ReadString(); // block?
+						recipes.Add(recipe);
+						ReadSignedVarInt(); // priority
+						//Log.Error("Read shapeless recipe");
+						break;
 					}
+					case Shaped:
+					{
+						ReadString(); // some unique id
+						int width = ReadSignedVarInt(); // Width
+						int height = ReadSignedVarInt(); // Height
+						var recipe = new ShapedRecipe(width, height);
+						if (width > 3 || height > 3) throw new Exception("Wrong number of ingredience. Width=" + width + ", height=" + height);
+						for (int w = 0; w < width; w++)
+						{
+							for (int h = 0; h < height; h++)
+							{
+								recipe.Input[(h * width) + w] = ReadRecipeIngredient();
+							}
+						}
 
-					int resultCount = ReadVarInt(); // 1?
-					for (int j = 0; j < resultCount; j++)
-					{
-						recipe.Result = ReadItem();
+						int resultCount = ReadVarInt(); // 1?
+						for (int j = 0; j < resultCount; j++)
+						{
+							recipe.Result.Add(ReadItem());
+						}
+						recipe.Id = ReadUUID(); // Id
+						recipe.Block = ReadString(); // block?
+						recipes.Add(recipe);
+						ReadSignedVarInt(); // priority
+						//Log.Error("Read shaped recipe");
+						break;
 					}
-					recipe.Id = ReadUUID(); // Id
-					recipe.Block = ReadString(); // block?
-					recipes.Add(recipe);
-					//Log.Error("Read shaped recipe");
-				}
-				else if (recipeType == Furnace)
-				{
-					SmeltingRecipe recipe = new SmeltingRecipe();
-					//short meta = (short) ReadVarInt(); // input (with metadata) 
-					short id = (short) ReadSignedVarInt(); // input (with metadata) 
-					Item result = ReadItem(); // Result
-					recipe.Block = ReadString(); // block?
-					recipe.Input = ItemFactory.GetItem(id, 0);
-					recipe.Result = result;
-					recipes.Add(recipe);
-					//Log.Error("Read furnace recipe");
-					//Log.Error($"Input={id}, meta={""} Item={result.Id}, Meta={result.Metadata}");
-				}
-				else if (recipeType == FurnaceData)
-				{
-					//const ENTRY_FURNACE_DATA = 3;
-					SmeltingRecipe recipe = new SmeltingRecipe();
-					short id = (short) ReadSignedVarInt(); // input (with metadata) 
-					short meta = (short) ReadSignedVarInt(); // input (with metadata) 
-					Item result = ReadItem(); // Result
-					recipe.Block = ReadString(); // block?
-					recipe.Input = ItemFactory.GetItem(id, meta);
-					recipe.Result = result;
-					recipes.Add(recipe);
-					//Log.Error("Read smelting recipe");
-					//Log.Error($"Input={id}, meta={meta} Item={result.Id}, Meta={result.Metadata}");
-				}
-				else if (recipeType == Multi)
-				{
-					//Log.Error("Reading MULTI");
+					case Furnace:
+					{
+						var recipe = new SmeltingRecipe();
+						//short meta = (short) ReadVarInt(); // input (with metadata) 
+						short id = (short) ReadSignedVarInt(); // input (with metadata) 
+						Item result = ReadItem(); // Result
+						recipe.Block = ReadString(); // block?
+						recipe.Input = ItemFactory.GetItem(id, 0);
+						recipe.Result = result;
+						recipes.Add(recipe);
+						//Log.Error("Read furnace recipe");
+						//Log.Error($"Input={id}, meta={""} Item={result.Id}, Meta={result.Metadata}");
+						break;
+					}
+					case FurnaceData:
+					{
+						//const ENTRY_FURNACE_DATA = 3;
+						var recipe = new SmeltingRecipe();
+						short id = (short) ReadSignedVarInt(); // input (with metadata) 
+						short meta = (short) ReadSignedVarInt(); // input (with metadata) 
+						Item result = ReadItem(); // Result
+						recipe.Block = ReadString(); // block?
+						recipe.Input = ItemFactory.GetItem(id, meta);
+						recipe.Result = result;
+						recipes.Add(recipe);
+						//Log.Error("Read smelting recipe");
+						//Log.Error($"Input={id}, meta={meta} Item={result.Id}, Meta={result.Metadata}");
+						break;
+					}
+					case Multi:
+					{
+						//Log.Error("Reading MULTI");
 
-					MultiRecipe recipe = new MultiRecipe();
-					recipe.Id = ReadUUID();
-					recipes.Add(recipe);
-				}
-				else if (recipeType == ShapelessChemistry)
-				{
-					int ingrediensCount = ReadVarInt(); // 
-					for (int j = 0; j < ingrediensCount; j++)
-					{
-						ReadItem();
+						var recipe = new MultiRecipe();
+						recipe.Id = ReadUUID();
+						recipes.Add(recipe);
+						break;
 					}
-					int resultCount = ReadVarInt(); // 
-					for (int j = 0; j < resultCount; j++)
+					case ShapelessChemistry:
 					{
-						ReadItem();
-					}
-
-					ReadUUID();
-					ReadString(); // block?
-				}
-				else if (recipeType == ShapedChemistry)
-				{
-					int width = ReadSignedVarInt(); // Width
-					int height = ReadSignedVarInt(); // Height
-					if (width > 3 || height > 3) throw new Exception("Wrong number of ingredience. Width=" + width + ", height=" + height);
-					for (int w = 0; w < width; w++)
-					{
-						for (int h = 0; h < height; h++)
+						int ingrediensCount = ReadVarInt(); // 
+						for (int j = 0; j < ingrediensCount; j++)
 						{
 							ReadItem();
 						}
-					}
+						int resultCount = ReadVarInt(); // 
+						for (int j = 0; j < resultCount; j++)
+						{
+							ReadItem();
+						}
 
-					int resultCount = ReadVarInt(); // 1?
-					for (int j = 0; j < resultCount; j++)
+						ReadUUID();
+						ReadString(); // block?
+						break;
+					}
+					case ShapedChemistry:
 					{
-						ReadItem();
-					}
+						int width = ReadSignedVarInt(); // Width
+						int height = ReadSignedVarInt(); // Height
+						if (width > 3 || height > 3) throw new Exception("Wrong number of ingredience. Width=" + width + ", height=" + height);
+						for (int w = 0; w < width; w++)
+						{
+							for (int h = 0; h < height; h++)
+							{
+								ReadItem();
+							}
+						}
 
-					ReadUUID(); // Id
-					ReadString(); // block?
-				}
-				else
-				{
-					Log.Error($"Read unknown recipe type: {recipeType}");
-					//ReadBytes(len);
+						int resultCount = ReadVarInt(); // 1?
+						for (int j = 0; j < resultCount; j++)
+						{
+							ReadItem();
+						}
+
+						ReadUUID(); // Id
+						ReadString(); // block?
+						break;
+					}
+					default:
+						Log.Error($"Read unknown recipe type: {recipeType}");
+						//ReadBytes(len);
+						break;
 				}
 			}
 
-			ReadByte(); // Clean (1) or update (0)
+			return recipes;
+		}
+
+		public void WriteRecipeIngredient(Item stack)
+		{
+			if (stack == null || stack.Id == 0)
+			{
+				WriteSignedVarInt(0);
+				return;
+			}
+
+			WriteSignedVarInt(stack.Id);
+			WriteSignedVarInt(stack.Metadata);
+			WriteSignedVarInt(stack.Count);
+		}
+
+		public Item ReadRecipeIngredient()
+		{
+			short id = (short) ReadSignedVarInt();
+			if (id == 0)
+			{
+				return new ItemAir();
+			}
+
+			short metadata = (short) ReadSignedVarInt();
+			int count = ReadSignedVarInt();
+
+			return ItemFactory.GetItem(id, metadata, count);
+		}
+
+
+		public void Write(PotionContainerChangeRecipe[] recipes)
+		{
+
+		}
+
+		public PotionContainerChangeRecipe[] ReadPotionContainerChangeRecipes()
+		{
+			int count = (int) ReadUnsignedVarInt();
+			var recipes = new PotionContainerChangeRecipe[count];
+			for (int i = 0; i < recipes.Length; i++)
+			{
+				var recipe = new PotionContainerChangeRecipe();
+				recipe.InputItemId = ReadVarInt();
+				recipe.IngredientItemId = ReadVarInt();
+				recipe.OutputItemId = ReadVarInt();
+
+				recipes[i] = recipe;
+			}
 
 			return recipes;
 		}
+
+		public void Write(PotionTypeRecipe[] recipes)
+		{
+
+		}
+
+		public PotionTypeRecipe[] ReadPotionTypeRecipes()
+		{
+			int count = (int) ReadUnsignedVarInt();
+			var recipes = new PotionTypeRecipe[count];
+			for (int i = 0; i < recipes.Length; i++)
+			{
+				var recipe = new PotionTypeRecipe();
+				recipe.InputPotionType = ReadVarInt();
+				recipe.IngredientItemId = ReadVarInt();
+				recipe.OutputPotionType = ReadVarInt();
+
+				recipes[i] = recipe;
+			}
+
+			return recipes;
+		}
+
 
 		const int BITFLAG_TEXTURE_UPDATE = 0x02;
 		const int BITFLAG_DECORATION_UPDATE = 0x04;

@@ -114,7 +114,7 @@ namespace TestPlugin.NiceLobby
 			var player = e.Player;
 			var level = player.Level;
 
-			if (player.Inventory.GetItemInHand() is CustomTestItem item)
+			if (level.TickTime % 10 == 0 && player.Inventory.GetItemInHand() is CustomTestItem item)
 			{
 				player.SendMessage("0x" + item.SomeVariable.ToString("X"), MessageType.Popup);
 			}
@@ -284,7 +284,12 @@ namespace TestPlugin.NiceLobby
 									}
 								}
 							}
-							skin.CapeData = bytes;
+							skin.Cape = new Cape()
+							{
+								ImageHeight = 32,
+								ImageWidth = 64,
+								Data = bytes,
+							};
 						}
 
 
@@ -293,7 +298,7 @@ namespace TestPlugin.NiceLobby
 						//player.SetNameTag(player.Username + " " + level.TickTime + " testing");
 						//player.SetDisplayName(player.Username + " " + level.TickTime + " testing");
 
-						var texture = skin.SkinData;
+						var texture = skin.Data;
 						byte[] smiley = GetTextureFromFile(@"D:\Temp\Smiley\big_smile0" + _image + ".png");
 						if (smiley.Length != 8 * 8 * 4) return;
 						int s = 0;
@@ -316,11 +321,7 @@ namespace TestPlugin.NiceLobby
 						{
 							McpePlayerSkin updateSkin = McpePlayerSkin.CreateObject();
 							updateSkin.uuid = player.ClientUuid;
-							updateSkin.skinId = skin.SkinId;
-							updateSkin.skinData = skin.SkinData;
-							updateSkin.capeData = skin.CapeData;
-							updateSkin.geometryModel = skin.SkinGeometryName;
-							updateSkin.geometryData = skin.SkinGeometry;
+							updateSkin.skin = skin;
 							level.RelayBroadcast(updateSkin);
 						}
 
@@ -406,15 +407,20 @@ namespace TestPlugin.NiceLobby
 			//player.Inventory.Slots[idx++] = new ItemMonsterEgg(EntityType.Sheep) {Count = 64};
 			//player.Inventory.Slots[idx++] = new ItemMonsterEgg(EntityType.Wolf) {Count = 64};
 
-			//player.Inventory.Slots[idx++] = new ItemDiamondAxe() {Count = 1};
-			//player.Inventory.Slots[idx++] = new ItemDiamondShovel() {Count = 1};
-			//player.Inventory.Slots[idx++] = new ItemDiamondPickaxe() {Count = 1};
-			//player.Inventory.Slots[idx++] = new ItemBlock(new Sapling(), 0) { Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemDiamondAxe() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemDiamondShovel() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemDiamondPickaxe() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new CraftingTable()) { Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new Chest()) { Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new Anvil()) { Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new EnchantingTable()) { Count = 64 };
+			//player.Inventory.Slots[idx++] = new ItemBlock(new Sapling()) { Count = 64 };
 			//player.Inventory.Slots[idx++] = new ItemBlock(new Sapling(), 2) { Count = 64 };
 			//player.Inventory.Slots[idx++] = new ItemBlock(new Vine(), 0) { Count = 64 };
 			//player.Inventory.Slots[idx++] = new ItemBlock(new Dirt(), 0) { Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemBlock(new Dirt()) { Count = 64 };
 			//player.Inventory.Slots[idx++] = new ItemBlock(new WoodenButton(), 0) { Count = 64 };
-			//player.Inventory.Slots[idx++] = new CustomTestItem(0xC0FFEE) { Count = 10 };
+			//player.Inventory.Slots[idx++] = new CustomTestItem(0xC0FFEE) { Count = 1 };
 			//player.Inventory.Slots[idx++] = new CustomTestItem(0xDEADBEEF) {Count = 10 };
 			//player.Inventory.Slots[idx++] = new CustomTestItem(0xDEADBEEF) {Count = 10 };
 			//player.Inventory.Slots[idx++] = new CustomTestItem(0xBEEF) {Count = 10 };
@@ -472,8 +478,8 @@ namespace TestPlugin.NiceLobby
 				Flight = 2
 			});
 
-			player.Inventory.Slots[idx++] = fireworks;
-			//player.Inventory.Slots[idx++] = new ItemBread() {Count = 64};
+			//player.Inventory.Slots[idx++] = fireworks;
+			player.Inventory.Slots[idx++] = new ItemBread() { Count = 64 };
 			//player.Inventory.Slots[idx++] = new ItemSnowball() {Count = 16};
 			//player.Inventory.Slots[idx++] = new ItemBow() {Count = 1};
 			//player.Inventory.Slots[idx++] = new ItemArrow() {Count = 64};
@@ -482,12 +488,17 @@ namespace TestPlugin.NiceLobby
 			//player.Inventory.Slots[idx++] = new ItemWheat() {Count = 1};
 			//player.Inventory.Slots[idx++] = new ItemCarrot() {Count = 1};
 			//player.Inventory.Slots[idx++] = new ItemWheatSeeds() {Count = 1};
-			//player.Inventory.Slots[idx++] = new ItemBone() {Count = 64};
+			player.Inventory.Slots[idx++] = new ItemBone() { Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemDye() { Metadata=4, Count = 64 };
+			player.Inventory.Slots[idx++] = new ItemIronSword() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemIronSword() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemIronSword() { Count = 1 };
+			player.Inventory.Slots[idx++] = new ItemIronSword() { Count = 1 };
 
-			//player.Inventory.Helmet = new ItemDiamondHelmet();
+			player.Inventory.Helmet = new ItemDiamondHelmet();
 			player.Inventory.Chest = new ItemElytra();
-			//player.Inventory.Leggings = new ItemDiamondLeggings();
-			//player.Inventory.Boots = new ItemDiamondBoots();
+			player.Inventory.Leggings = new ItemDiamondLeggings();
+			player.Inventory.Boots = new ItemDiamondBoots();
 			//while (player.Inventory.SetFirstEmptySlot(new ItemIronAxe(), false)) { }
 
 			player.SendPlayerInventory();
@@ -584,32 +595,32 @@ namespace TestPlugin.NiceLobby
 						timeReset.time = (int) level.WorldTime;
 						level.RelayBroadcast(timeDay);
 
-						Thread.Sleep(200);
+						//Thread.Sleep(200);
 
-						{
-							var mcpeExplode = McpeExplode.CreateObject();
-							mcpeExplode.position = point1.ToVector3();
-							mcpeExplode.radius = 100;
-							mcpeExplode.records = new Records();
-							level.RelayBroadcast(mcpeExplode);
-						}
+						//{
+						//	var mcpeExplode = McpeExplode.CreateObject();
+						//	mcpeExplode.position = point1.ToVector3();
+						//	mcpeExplode.radius = 100;
+						//	mcpeExplode.records = new Records();
+						//	level.RelayBroadcast(mcpeExplode);
+						//}
 
-						Thread.Sleep(250);
-						{
-							var mcpeExplode = McpeExplode.CreateObject();
-							mcpeExplode.position = point2.ToVector3();
-							mcpeExplode.radius = 100;
-							mcpeExplode.records = new Records();
-							level.RelayBroadcast(mcpeExplode);
-						}
-						Thread.Sleep(250);
-						{
-							var mcpeExplode = McpeExplode.CreateObject();
-							mcpeExplode.position = point3.ToVector3();
-							mcpeExplode.radius = 100;
-							mcpeExplode.records = new Records();
-							level.RelayBroadcast(mcpeExplode);
-						}
+						//Thread.Sleep(250);
+						//{
+						//	var mcpeExplode = McpeExplode.CreateObject();
+						//	mcpeExplode.position = point2.ToVector3();
+						//	mcpeExplode.radius = 100;
+						//	mcpeExplode.records = new Records();
+						//	level.RelayBroadcast(mcpeExplode);
+						//}
+						//Thread.Sleep(250);
+						//{
+						//	var mcpeExplode = McpeExplode.CreateObject();
+						//	mcpeExplode.position = point3.ToVector3();
+						//	mcpeExplode.radius = 100;
+						//	mcpeExplode.records = new Records();
+						//	level.RelayBroadcast(mcpeExplode);
+						//}
 					});
 				}
 

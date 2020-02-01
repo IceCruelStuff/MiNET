@@ -28,7 +28,7 @@ Read more about packets and this specification on the [Protocol Wiki](https://gi
 | Rider Jump | 0x14 | 20 |   
 | Update Block | 0x15 | 21 |   
 | Add Painting | 0x16 | 22 |   
-| Explode | 0x17 | 23 |   
+| Tick Sync | 0x17 | 23 |   
 | Level Sound Event Old | 0x18 | 24 |   
 | Level Event | 0x19 | 25 |   
 | Block Event | 0x1a | 26 |   
@@ -139,6 +139,7 @@ Read more about packets and this specification on the [Protocol Wiki](https://gi
 | Update Block Properties | 0x86 | 134 |   
 | Client Cache Blob Status | 0x87 | 135 |   
 | Client Cache Miss Response | 0x88 | 136 |   
+| Network Settings Packet | 0x8f | 143 |   
 
 
 ## Data types
@@ -146,7 +147,7 @@ Read more about packets and this specification on the [Protocol Wiki](https://gi
 | Data type | 
 |:--- |
 | BlockCoordinates [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-BlockCoordinates) |
-| Blockstates [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-Blockstates) |
+| BlockPallet [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-BlockPallet) |
 | bool [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-bool) |
 | byte [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-byte) |
 | byte[] [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-byte[]) |
@@ -170,8 +171,9 @@ Read more about packets and this specification on the [Protocol Wiki](https://gi
 | PlayerAttributes [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-PlayerAttributes) |
 | PlayerLocation [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-PlayerLocation) |
 | PlayerRecords [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-PlayerRecords) |
+| PotionContainerChangeRecipe[] [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-PotionContainerChangeRecipe[]) |
+| PotionTypeRecipe[] [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-PotionTypeRecipe[]) |
 | Recipes [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-Recipes) |
-| Records [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-Records) |
 | ResourcePackIds [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-ResourcePackIds) |
 | ResourcePackIdVersions [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-ResourcePackIdVersions) |
 | ResourcePackInfos [(wiki)](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Type-ResourcePackInfos) |
@@ -324,6 +326,7 @@ Wiki: [Resource Pack Stack](https://github.com/NiclasOlofsson/MiNET/wiki//Protoc
 |BehaviorPackIdVersions | ResourcePackIdVersions |  |
 |ResourcePackIdVersions | ResourcePackIdVersions |  |
 |Is experimental | bool |  |
+|Game Version | string |  |
 -----------------------------------------------------------------------
 ### Resource Pack Client Response (0x08)
 Wiki: [Resource Pack Client Response](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-ResourcePackClientResponse)
@@ -412,7 +415,7 @@ Wiki: [Start Game](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-StartG
 |Runtime Entity ID | UnsignedVarLong |  |
 |Player Gamemode | SignedVarInt |  |
 |Spawn | Vector3 |  |
-|Unknown 1 | Vector2 |  |
+|Rotation | Vector2 |  |
 |Seed | SignedVarInt |  |
 |Dimension | SignedVarInt |  |
 |Generator | SignedVarInt |  |
@@ -423,7 +426,7 @@ Wiki: [Start Game](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-StartG
 |Z | SignedVarInt |  |
 |Has achievements disabled | bool |  |
 |Day cycle stop time | SignedVarInt |  |
-|EDU mode | bool |  |
+|EDU offer | SignedVarInt |  |
 |Has EDU features enabled | bool |  |
 |Rain level | float |  |
 |Lightning level | float |  |
@@ -446,13 +449,15 @@ Wiki: [Start Game](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-StartG
 |Is From World Template | bool |  |
 |Is World Template Option Locked | bool |  |
 |Only Spawn V1 Villagers | bool |  |
+|Game Version | string |  |
 |Level ID | string |  |
 |World name | string |  |
 |Premium World Template Id | string |  |
 |Is Trial | bool |  |
+|Is Server Side movement enabled | bool |  |
 |Current Tick | long |  |
 |Enchantment Seed | SignedVarInt |  |
-|Blockstates | Blockstates |  |
+|Block Pallet | BlockPallet |  |
 |Itemstates | Itemstates |  |
 |Multiplayer Correlation ID | string |  |
 -----------------------------------------------------------------------
@@ -493,6 +498,7 @@ Wiki: [Add Player](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-AddPla
 |User Id | long |  |
 |Links | Links |  |
 |Device ID | string |  |
+|Device OS | int |  |
 -----------------------------------------------------------------------
 ### Add Entity (0x0d)
 Wiki: [Add Entity](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-AddEntity)
@@ -716,11 +722,11 @@ Wiki: [Add Painting](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-AddP
 |Direction | SignedVarInt |  |
 |Title | string |  |
 -----------------------------------------------------------------------
-### Explode (0x17)
-Wiki: [Explode](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Explode)
+### Tick Sync (0x17)
+Wiki: [Tick Sync](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-TickSync)
 
 **Sent from server:** true  
-**Sent from client:** false
+**Sent from client:** true
 
 
 
@@ -729,9 +735,8 @@ Wiki: [Explode](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Explode)
 
 | Name | Type | Size |
 |:-----|:-----|:-----|
-|Position | Vector3 |  |
-|Radius | SignedVarInt |  |
-|Records | Records |  |
+|Request Time | long |  |
+|Response Time | long |  |
 -----------------------------------------------------------------------
 ### Level Sound Event Old (0x18)
 Wiki: [Level Sound Event Old](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-LevelSoundEventOld)
@@ -869,18 +874,22 @@ Wiki: [Inventory Transaction](https://github.com/NiclasOlofsson/MiNET/wiki//Prot
 |Crafting | 100 |
 |Unspecified | 99999 |
 
-#### Normal Action constants
+#### Crafting Action constants
 
 | Name | Value |
 |:-----|:-----|
-|Put Slot | -2 |
-|Get Slot | -3 |
-|Get Result | -4 |
-|Craft Use | -5 |
+|Craft Add Ingredient | -2 |
+|Craft Remove Ingredient | -3 |
+|Craft Result | -4 |
+|Craft Use Ingredient | -5 |
+|Anvil Input | -10 |
+|Anvil Material | -11 |
+|Anvil Result | -12 |
+|Anvil Output | -13 |
 |Enchant Item | -15 |
 |Enchant Lapis | -16 |
 |Enchant Result | -17 |
-|Drop | 199 |
+|Drop | -100 |
 
 #### Item Release Action constants
 
@@ -893,8 +902,8 @@ Wiki: [Inventory Transaction](https://github.com/NiclasOlofsson/MiNET/wiki//Prot
 
 | Name | Value |
 |:-----|:-----|
-|Place | 0 |
-|Use | 1 |
+|Place, Clickblock | 0 |
+|Use, Clickair | 1 |
 |Destroy | 2 |
 
 #### Item Use On Entity Action constants
@@ -964,8 +973,10 @@ Wiki: [Interact](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Interact
 |:-----|:-----|
 |Right Click | 1 |
 |Left Click | 2 |
-|Leave Cehicle | 3 |
+|Leave Vehicle | 3 |
 |Mouse Over | 4 |
+|Open Npc | 5 |
+|Open Inventory | 6 |
 
 
 #### Fields
@@ -1174,6 +1185,14 @@ Wiki: [Respawn](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Respawn)
 
 
 
+#### Respawn State constants
+
+| Name | Value |
+|:-----|:-----|
+|Search | 0 |
+|Ready | 1 |
+|Client Ready | 2 |
+
 
 #### Fields
 
@@ -1182,6 +1201,8 @@ Wiki: [Respawn](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Respawn)
 |X | float |  |
 |Y | float |  |
 |Z | float |  |
+|State | byte |  |
+|Runtime Entity ID | UnsignedVarLong |  |
 -----------------------------------------------------------------------
 ### Container Open (0x2e)
 Wiki: [Container Open](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-ContainerOpen)
@@ -1297,6 +1318,9 @@ Wiki: [Crafting Data](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Cra
 | Name | Type | Size |
 |:-----|:-----|:-----|
 |Recipes | Recipes |  |
+|Potion type recipes | PotionTypeRecipe[] |  |
+|potion container recipes | PotionContainerChangeRecipe[] |  |
+|Is Clean | bool |  |
 -----------------------------------------------------------------------
 ### Crafting Event (0x35)
 Wiki: [Crafting Event](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-CraftingEvent)
@@ -1522,9 +1546,9 @@ Wiki: [Telemetry Event](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-T
 
 | Name | Type | Size |
 |:-----|:-----|:-----|
-|Entity ID Self | SignedVarLong |  |
-|Unk1 | SignedVarInt |  |
-|Unk2 | byte |  |
+|Runtime Entity ID | UnsignedVarLong |  |
+|Event data | SignedVarInt |  |
+|Event type | byte |  |
 -----------------------------------------------------------------------
 ### Spawn Experience Orb (0x42)
 Wiki: [Spawn Experience Orb](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-SpawnExperienceOrb)
@@ -1655,6 +1679,19 @@ Wiki: [Boss Event](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-BossEv
 **Sent from client:** false
 
 
+
+#### Type constants
+
+| Name | Value |
+|:-----|:-----|
+|Add Boss | 0 |
+|Add Player | 1 |
+|Remove Boss | 2 |
+|Remove Player | 3 |
+|Update Progress | 4 |
+|Update Name | 5 |
+|Update Options | 6 |
+|Update Style | 7 |
 
 
 #### Fields
@@ -1822,8 +1859,7 @@ Wiki: [Resource Pack Chunk Data](https://github.com/NiclasOlofsson/MiNET/wiki//P
 |Package ID | string |  |
 |Chunk Index | uint |  |
 |Progress | ulong |  |
-|Length | uint |  |
-|Payload | byte[] | (int) length |
+|Payload | ByteArray |  |
 -----------------------------------------------------------------------
 ### Resource Pack Chunk Request (0x54)
 Wiki: [Resource Pack Chunk Request](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-ResourcePackChunkRequest)
@@ -1983,13 +2019,9 @@ Wiki: [Player Skin](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-Playe
 | Name | Type | Size |
 |:-----|:-----|:-----|
 |UUID | UUID |  |
-|Skin ID | string |  |
+|Skin | Skin |  |
 |Skin Name | string |  |
 |Old Skin Name | string |  |
-|Skin Data | ByteArray |  |
-|Cape Data | ByteArray |  |
-|Geometry Model | string |  |
-|Geometry Data | string |  |
 -----------------------------------------------------------------------
 ### Sub Client Login (0x5e)
 Wiki: [Sub Client Login](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-SubClientLogin)
@@ -2293,7 +2325,7 @@ Wiki: [Move Entity Delta](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol
 | Name | Type | Size |
 |:-----|:-----|:-----|
 |Runtime Entity ID | UnsignedVarLong |  |
-|Flags | byte |  |
+|Flags | ushort |  |
 -----------------------------------------------------------------------
 ### Set Scoreboard Identity Packet (0x70)
 Wiki: [Set Scoreboard Identity Packet](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-SetScoreboardIdentityPacket)
@@ -2359,8 +2391,8 @@ Wiki: [Network Stack Latency Packet](https://github.com/NiclasOlofsson/MiNET/wik
 
 | Name | Type | Size |
 |:-----|:-----|:-----|
-|Timestamp | long |  |
-|Need Response | bool |  |
+|Timestamp | ulong |  |
+|Unknown Flag | byte |  |
 -----------------------------------------------------------------------
 ### Script Custom Event Packet (0x75)
 Wiki: [Script Custom Event Packet](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-ScriptCustomEventPacket)
@@ -2533,7 +2565,7 @@ Wiki: [Video Stream Connect](https://github.com/NiclasOlofsson/MiNET/wiki//Proto
 Wiki: [Client Cache Status](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-ClientCacheStatus)
 
 **Sent from server:** true  
-**Sent from client:** false
+**Sent from client:** true
 
 
 
@@ -2640,6 +2672,28 @@ Wiki: [Client Cache Miss Response](https://github.com/NiclasOlofsson/MiNET/wiki/
 
 | Name | Type | Size |
 |:-----|:-----|:-----|
+-----------------------------------------------------------------------
+### Network Settings Packet (0x8f)
+Wiki: [Network Settings Packet](https://github.com/NiclasOlofsson/MiNET/wiki//Protocol-NetworkSettingsPacket)
+
+**Sent from server:** true  
+**Sent from client:** false
+
+
+
+#### Compression constants
+
+| Name | Value |
+|:-----|:-----|
+|Nothing | 0 |
+|Everything | 1 |
+
+
+#### Fields
+
+| Name | Type | Size |
+|:-----|:-----|:-----|
+|Compression threshold | short |  |
 -----------------------------------------------------------------------
 
 

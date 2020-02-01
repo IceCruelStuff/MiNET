@@ -383,15 +383,19 @@ namespace MiNET
 
 				MiNetServer.TraceReceive(message);
 
-				if (CryptoContext != null && CryptoContext.UseEncryption)
-				{
-					MiNetServer.FastThreadPool.QueueUserWorkItem(() =>
-					{
-						HandlePacket(MessageHandler, message as Packet);
-						message.PutPool();
-					});
-				}
-				else
+				// This needs rework. Some packets (transaction) really require the correct order to be maintained 
+				// in order to process correctly. I was thinking perhaps marking some packets as "order important" and
+				// check that flag here. But for now, I'm disabling the threading here. Not even sure why it is here.
+
+				//if (CryptoContext != null && CryptoContext.UseEncryption)
+				//{
+				//	MiNetServer.FastThreadPool.QueueUserWorkItem(() =>
+				//	{
+				//		HandlePacket(MessageHandler, message as Packet);
+				//		message.PutPool();
+				//	});
+				//}
+				//else
 				{
 					HandlePacket(MessageHandler, message);
 					message.PutPool();
@@ -473,6 +477,11 @@ namespace MiNET
 			else if (typeof(McpeLevelSoundEvent) == message.GetType())
 			{
 				handler.HandleMcpeLevelSoundEvent((McpeLevelSoundEvent) message);
+			}
+
+			else if (typeof(McpeClientCacheStatus) == message.GetType())
+			{
+				handler.HandleMcpeClientCacheStatus((McpeClientCacheStatus) message);
 			}
 
 			else if (typeof(McpeAnimate) == message.GetType())
@@ -655,9 +664,19 @@ namespace MiNET
 				handler.HandleMcpeSetEntityData((McpeSetEntityData) message);
 			}
 
+			else if (typeof(McpeTickSync) == message.GetType())
+			{
+				handler.HandleMcpeTickSync((McpeTickSync) message);
+			}
+
 			else if (typeof(McpeNpcRequest) == message.GetType())
 			{
 				handler.HandleMcpeNpcRequest((McpeNpcRequest) message);
+			}
+
+			else if (typeof(McpeNetworkStackLatencyPacket) == message.GetType())
+			{
+				handler.HandleMcpeNetworkStackLatencyPacket((McpeNetworkStackLatencyPacket) message);
 			}
 
 			else
@@ -1085,6 +1104,7 @@ namespace MiNET
 		public string DeviceModel { get; set; }
 		public string GameVersion { get; set; }
 		public int DeviceOS { get; set; }
+		public string DeviceId { get; set; }
 		public int GuiScale { get; set; }
 		public int UIProfile { get; set; }
 		public int Edition { get; set; }

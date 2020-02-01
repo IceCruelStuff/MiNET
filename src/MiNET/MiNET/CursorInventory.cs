@@ -18,45 +18,32 @@
 // The Original Developer is the Initial Developer.  The Initial Developer of
 // the Original Code is Niclas Olofsson.
 // 
-// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2020 Niclas Olofsson.
+// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2019 Niclas Olofsson.
 // All Rights Reserved.
 
 #endregion
 
-using System.IO;
-using System.Reflection;
+using System.Collections.Generic;
+using System.Linq;
 using log4net;
-using log4net.Config;
-using MiNET.Utils;
+using MiNET.Items;
 
-namespace MiNET.Console
+namespace MiNET
 {
-	class Startup
+	public class CursorInventory
 	{
-		private static readonly ILog Log = LogManager.GetLogger(typeof(Startup));
+		private static readonly ILog Log = LogManager.GetLogger(typeof(CursorInventory));
 
-		static void Main(string[] args)
+		public List<Item> Slots { get; } = Enumerable.Repeat((Item) new ItemAir(), 51).ToList();
+
+		public Item Cursor
 		{
-			var logRepository = LogManager.GetRepository(Assembly.GetEntryAssembly());
-			XmlConfigurator.Configure(logRepository, new FileInfo(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "log4net.xml")));
+			get => Slots[0];
+			set => Slots[0] = value;
+		}
 
-			System.Console.WriteLine(MiNetServer.MiNET);
-			Log.Info(MiNetServer.MiNET);
-
-			var service = new MiNetServer();
-			Log.Info("Starting...");
-	
-			if(Config.GetProperty("UserBedrockGenerator", false))
-			{
-				service.LevelManager = new LevelManager();
-				service.LevelManager.Generator = new BedrockGenerator();
-			}
-			
-			service.StartServer();
-
-			System.Console.WriteLine("MiNET running. Press <enter> to stop service.");
-			System.Console.ReadLine();
-			service.StopServer();
+		public CursorInventory()
+		{
 		}
 	}
 }

@@ -1129,6 +1129,7 @@ namespace MiNET.Worlds
 		public ChunkColumn GetChunk(ChunkCoordinates chunkCoordinates, bool cacheOnly = false)
 		{
 			var chunk = WorldProvider.GenerateChunkColumn(chunkCoordinates, cacheOnly);
+			if(chunk == null) Log.Error($"Got <null> chunk at {chunkCoordinates}");
 			return chunk;
 		}
 
@@ -1718,6 +1719,15 @@ namespace MiNET.Worlds
 			rules.Add(new GameRule<bool>(GameRulesEnum.SendCommandfeedback, SendCommandfeedback));
 			rules.Add(new GameRule<bool>(GameRulesEnum.ExperimentalGameplay, true));
 			return rules;
+		}
+
+		public void BroadcastSound(BlockCoordinates position, LevelSoundEventType sound, int blockId = 0, Player sender = null)
+		{
+			var packet = McpeLevelSoundEvent.CreateObject();
+			packet.position = position;
+			packet.soundId = (uint) sound;
+			packet.blockId = blockId;
+			RelayBroadcast(sender, packet);
 		}
 	}
 
