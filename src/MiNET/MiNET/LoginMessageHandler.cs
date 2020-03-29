@@ -34,6 +34,7 @@ using fNbt;
 using Jose;
 using log4net;
 using MiNET.Net;
+using MiNET.Net.RakNet;
 using MiNET.Utils;
 using MiNET.Utils.Skins;
 using Newtonsoft.Json.Linq;
@@ -50,12 +51,12 @@ namespace MiNET
 	{
 		private static readonly ILog Log = LogManager.GetLogger(typeof(LoginMessageHandler));
 
-		private readonly PlayerNetworkSession _session;
+		private readonly RakSession _session;
 
 		private object _loginSyncLock = new object();
 		private PlayerInfo _playerInfo = new PlayerInfo();
 
-		public LoginMessageHandler(PlayerNetworkSession session)
+		public LoginMessageHandler(RakSession session)
 		{
 			_session = session;
 		}
@@ -257,7 +258,6 @@ namespace MiNET
 								}
 							);
 						}
-						Log.Warn($"Cape data lenght={_playerInfo.Skin.Cape.Data.Length}");
 					}
 					catch (Exception e)
 					{

@@ -1,4 +1,4 @@
-#region LICENSE
+﻿#region LICENSE
 
 // The contents of this file are subject to the Common Public Attribution
 // License Version 1.0. (the "License"); you may not use this file except in
@@ -52,14 +52,14 @@ namespace MiNET.Utils
 		public static McpeWrapper CreateBatchPacket(Memory<byte> input, CompressionLevel compressionLevel, bool writeLen)
 		{
 			var batch = McpeWrapper.CreateObject();
-			batch.payload = Compression.Compress(input, writeLen, compressionLevel);
+			batch.payload = Compression.Compress(input, writeLen, input.Length > 1000 ? compressionLevel : CompressionLevel.NoCompression);
 			batch.Encode(); // prepare
 			return batch;
 		}
 
-		public static void WriteLength(Stream stream, int lenght)
+		public static void WriteLength(Stream stream, int length)
 		{
-			VarInt.WriteUInt32(stream, (uint) lenght);
+			VarInt.WriteUInt32(stream, (uint) length);
 		}
 
 		public static int ReadLength(Stream stream)

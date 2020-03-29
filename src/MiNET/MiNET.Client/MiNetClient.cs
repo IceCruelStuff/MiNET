@@ -3,10 +3,10 @@
 // The contents of this file are subject to the Common Public Attribution
 // License Version 1.0. (the "License"); you may not use this file except in
 // compliance with the License. You may obtain a copy of the License at
-// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE. 
-// The License is based on the Mozilla Public License Version 1.1, but Sections 14 
-// and 15 have been added to cover use of software over a computer network and 
-// provide for limited attribution for the Original Developer. In addition, Exhibit A has 
+// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE.
+// The License is based on the Mozilla Public License Version 1.1, but Sections 14
+// and 15 have been added to cover use of software over a computer network and
+// provide for limited attribution for the Original Developer. In addition, Exhibit A has
 // been modified to be consistent with Exhibit B.
 // 
 // Software distributed under the License is distributed on an "AS IS" basis,
@@ -18,12 +18,13 @@
 // The Original Developer is the Initial Developer.  The Initial Developer of
 // the Original Code is Niclas Olofsson.
 // 
-// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2018 Niclas Olofsson. 
+// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2020 Niclas Olofsson.
 // All Rights Reserved.
 
 #endregion
 
 using System;
+using System.Buffers;
 using System.CodeDom.Compiler;
 using System.Collections;
 using System.Collections.Concurrent;
@@ -50,6 +51,7 @@ using MiNET.Crafting;
 using MiNET.Entities;
 using MiNET.Items;
 using MiNET.Net;
+using MiNET.Net.RakNet;
 using MiNET.Utils;
 using MiNET.Worlds;
 using Newtonsoft.Json;
@@ -80,9 +82,12 @@ namespace MiNET.Client
 		public Vector3 SpawnPoint { get; set; }
 		public long EntityId { get; set; }
 		public long NetworkEntityId { get; set; }
-		public PlayerNetworkSession Session { get; set; }
+		public RakSession Session { get; set; }
 		private Thread _mainProcessingThread;
 		public int ChunkRadius { get; set; } = 5;
+
+		public ConcurrentDictionary<long, Entity> Entities { get; private set; } = new ConcurrentDictionary<long, Entity>();
+		public BlockPalette BlockPalette { get; set; } = new BlockPalette();
 
 		public LevelInfo LevelInfo { get; } = new LevelInfo();
 
@@ -113,7 +118,7 @@ namespace MiNET.Client
 			ClientId = new Random().Next();
 			ServerEndpoint = endpoint;
 			_threadPool = threadPool;
-			if (ServerEndpoint != null) Log.Warn("Connecting to: " + ServerEndpoint);
+			if (ServerEndpoint != null) Log.Info("Connecting to: " + ServerEndpoint);
 			ClientEndpoint = new IPEndPoint(IPAddress.Any, 0);
 			MessageDispatcher = new McpeClientMessageDispatcher(new BedrockTraceHandler(this));
 		}
@@ -153,19 +158,14 @@ namespace MiNET.Client
 					////
 				}
 
-				//Task.Run(ProcessQueue);
+				Session = new RakSession(null, null, ClientEndpoint, _mtuSize);
 
-				Session = new PlayerNetworkSession(null, null, ClientEndpoint, _mtuSize);
-
-				//UdpClient.BeginReceive(ReceiveCallback, UdpClient);
-				_mainProcessingThread = new Thread(ProcessDatagrams) {IsBackground = true};
+				_mainProcessingThread = new Thread(ProcessDatagram) {IsBackground = true};
 				_mainProcessingThread.Start(UdpClient);
 
 				ClientEndpoint = (IPEndPoint) UdpClient.Client.LocalEndPoint;
 
-				Log.InfoFormat("Server open for business for {0}", Username);
-
-				return;
+				Log.InfoFormat("Client open for actions by {0}", Username);
 			}
 			catch (Exception e)
 			{
@@ -203,12 +203,12 @@ namespace MiNET.Client
 			return false;
 		}
 
-		private void ProcessDatagrams(object state)
+		private void ProcessDatagram(object state)
 		{
+			var listener = (UdpClient) state;
+
 			while (true)
 			{
-				UdpClient listener = (UdpClient) state;
-
 
 				// Check if we already closed the server
 				if (listener.Client == null) return;
@@ -219,13 +219,12 @@ namespace MiNET.Client
 				// this error indicates a previous send operation resulted in an ICMP Port Unreachable message.
 				// Note the spocket settings on creation of the server. It makes us ignore these resets.
 				IPEndPoint senderEndpoint = null;
-				Byte[] receiveBytes = null;
 				try
 				{
-					//var result = listener.ReceiveAsync().Result;
-					//senderEndpoint = result.RemoteEndPoint;
-					//receiveBytes = result.Buffer;
-					receiveBytes = listener.Receive(ref senderEndpoint);
+					ReadOnlyMemory<byte> receiveBytes = listener.Receive(ref senderEndpoint);
+					//UdpReceiveResult result = listener.ReceiveAsync().Result;
+					//IPEndPoint senderEndpoint = result.RemoteEndPoint;
+					//byte[] receiveBytes = result.Buffer;
 
 					if (receiveBytes.Length != 0)
 					{
@@ -237,7 +236,7 @@ namespace MiNET.Client
 							}
 							catch (Exception e)
 							{
-								Log.Warn(string.Format("Process message error from: {0}", senderEndpoint.Address), e);
+								Log.Warn($"Process message error from: {senderEndpoint.Address}", e);
 							}
 						});
 					}
@@ -247,77 +246,22 @@ namespace MiNET.Client
 						return;
 					}
 				}
-				catch (Exception e)
+				catch (AggregateException)
 				{
-					Log.Error("Unexpected end of transmission?", e);
-					if (listener.Client != null)
-					{
-						continue;
-					}
+					return;
+				}
+				catch (ObjectDisposedException)
+				{
+					return;
+				}
+				catch (SocketException e)
+				{
+					if (e.ErrorCode != 10004) Log.Error("Unexpected end of receive", e);
+
+					if (listener.Client != null) continue;
 
 					return;
 				}
-			}
-		}
-
-
-		/// <summary>
-		///     Handles the callback.
-		/// </summary>
-		/// <param name="ar">The results</param>
-		private void ReceiveCallback(IAsyncResult ar)
-		{
-			UdpClient listener = (UdpClient) ar.AsyncState;
-
-			if (listener.Client == null) return;
-
-			// WSAECONNRESET:
-			// The virtual circuit was reset by the remote side executing a hard or abortive close. 
-			// The application should close the socket; it is no longer usable. On a UDP-datagram socket 
-			// this error indicates a previous send operation resulted in an ICMP Port Unreachable message.
-			// Note the spocket settings on creation of the server. It makes us ignore these resets.
-			IPEndPoint senderEndpoint = new IPEndPoint(0, 0);
-			Byte[] receiveBytes;
-			try
-			{
-				receiveBytes = listener.EndReceive(ar, ref senderEndpoint);
-			}
-			catch (Exception e)
-			{
-				if (listener.Client == null) return;
-				Log.Error("Recieve processing", e);
-
-				try
-				{
-					listener.BeginReceive(ReceiveCallback, listener);
-				}
-				catch (ObjectDisposedException dex)
-				{
-					// Log and move on. Should probably free up the player and remove them here.
-					Log.Error("Recieve processing", dex);
-				}
-
-				return;
-			}
-
-			if (receiveBytes.Length != 0)
-			{
-				if (listener.Client == null) return;
-				try
-				{
-					listener.BeginReceive(ReceiveCallback, listener);
-
-					if (listener.Client == null) return;
-					ProcessMessage(receiveBytes, senderEndpoint);
-				}
-				catch (Exception e)
-				{
-					Log.Error("Processing", e);
-				}
-			}
-			else
-			{
-				Log.Error("Unexpected end of transmission?");
 			}
 		}
 
@@ -327,9 +271,9 @@ namespace MiNET.Client
 		/// <param name="receiveBytes">The received bytes.</param>
 		/// <param name="senderEndpoint">The sender's endpoint.</param>
 		/// <exception cref="System.Exception">Receive ERROR, NAK in wrong place</exception>
-		private void ProcessMessage(byte[] receiveBytes, IPEndPoint senderEndpoint)
+		private void ProcessMessage(ReadOnlyMemory<byte> receiveBytes, IPEndPoint senderEndpoint)
 		{
-			byte msgId = receiveBytes[0];
+			byte msgId = receiveBytes.Span[0];
 
 			if (msgId <= (byte) DefaultMessageIdTypes.ID_USER_PACKET_ENUM)
 			{
@@ -354,7 +298,7 @@ namespace MiNET.Client
 					{
 						var incoming = (OpenConnectionReply1) message;
 						if (incoming.mtuSize != _mtuSize) Log.Warn("Error, mtu differ from what we sent:" + incoming.mtuSize);
-						Log.Warn($"Server with ID {incoming.serverGuid} security={incoming.serverHasSecurity}");
+						Log.Debug($"Server with ID {incoming.serverGuid} security={incoming.serverHasSecurity}");
 						_mtuSize = incoming.mtuSize;
 						SendOpenConnectionRequest2();
 						break;
@@ -373,20 +317,19 @@ namespace MiNET.Client
 			}
 			else
 			{
-				DatagramHeader header = new DatagramHeader(receiveBytes[0]);
-				if (!header.isACK && !header.isNAK && header.isValid)
+				var header = new DatagramHeader(receiveBytes.Span[0]);
+				if (!header.IsAck && !header.IsNak && header.IsValid)
 				{
-					if (receiveBytes[0] == 0xa0)
+					if (receiveBytes.Span[0] == 0xa0)
 					{
 						throw new Exception("Receive ERROR, NAK in wrong place");
 					}
 
-					if (IsEmulator && PlayerStatus == 3)
+					if (IsEmulator && HasSpawned /*&& PlayerStatus == 3*/)
 					{
-						int datagramId = new Int24(new[] {receiveBytes[1], receiveBytes[2], receiveBytes[3]});
 
-						//Acks ack = Acks.CreateObject();
-						Acks ack = new Acks();
+						int datagramId = new Int24(receiveBytes.Span.Slice(1, 3));
+						var ack = new Acks();
 						ack.acks.Add(datagramId);
 						byte[] data = ack.Encode();
 						ack.PutPool();
@@ -395,14 +338,12 @@ namespace MiNET.Client
 						return;
 					}
 
-					ConnectedPacket packet = ConnectedPacket.CreateObject();
+					var packet = ConnectedPacket.CreateObject();
 					packet.Decode(receiveBytes);
-					header = packet._datagramHeader;
-					//Log.Debug($"> Datagram #{header.datagramSequenceNumber}, {package._hasSplit}, {package._splitPacketId}, {package._reliability}, {package._reliableMessageNumber}, {package._sequencingIndex}, {package._orderingChannel}, {package._orderingIndex}");
 
 					{
-						Acks ack = Acks.CreateObject();
-						ack.acks.Add(packet._datagramSequenceNumber.IntValue());
+						var ack = Acks.CreateObject();
+						ack.acks.Add(packet.Header.DatagramSequenceNumber);
 						byte[] data = ack.Encode();
 						ack.PutPool();
 						SendData(data, senderEndpoint);
@@ -411,21 +352,19 @@ namespace MiNET.Client
 					HandleConnectedPacket(packet);
 					packet.PutPool();
 				}
-				else if (header.isPacketPair)
+				else if (header.IsPacketPair)
 				{
 					Log.Warn("header.isPacketPair");
 				}
-				else if (header.isACK && header.isValid)
+				else if (header.IsAck && header.IsValid)
 				{
 					HandleAck(receiveBytes, senderEndpoint);
 				}
-				else if (header.isNAK && header.isValid)
+				else if (header.IsNak && header.IsValid)
 				{
-					Nak nak = new Nak();
-					nak.Decode(receiveBytes);
 					HandleNak(receiveBytes, senderEndpoint);
 				}
-				else if (!header.isValid)
+				else if (!header.IsValid)
 				{
 					Log.Warn("!!!! ERROR, Invalid header !!!!!");
 				}
@@ -440,9 +379,9 @@ namespace MiNET.Client
 		{
 			foreach (var message in packet.Messages)
 			{
-				if (message is SplitPartPacket)
+				if (message is SplitPartPacket partPacket)
 				{
-					HandleSplitMessage(Session, (SplitPartPacket) message);
+					HandleSplitMessage(Session, partPacket);
 
 					continue;
 				}
@@ -464,7 +403,7 @@ namespace MiNET.Client
 
 		public void AddToProcessing(Packet message)
 		{
-			if (message.Reliability != Reliability.ReliableOrdered)
+			if (message.ReliabilityHeader.Reliability != Reliability.ReliableOrdered)
 			{
 				HandlePacket(message);
 				return;
@@ -474,10 +413,10 @@ namespace MiNET.Client
 
 			lock (_eventSync)
 			{
-				if (_queue.Count == 0 && message.OrderingIndex == _lastSequenceNumber + 1)
+				if (_queue.Count == 0 && message.ReliabilityHeader.OrderingIndex == _lastSequenceNumber + 1)
 				{
 					HandlePacket(message);
-					_lastSequenceNumber = message.OrderingIndex;
+					_lastSequenceNumber = message.ReliabilityHeader.OrderingIndex;
 					return;
 				}
 
@@ -488,7 +427,7 @@ namespace MiNET.Client
 					_processingThread.Start();
 				}
 
-				_queue.Enqueue(message.OrderingIndex, message);
+				_queue.Enqueue(message.ReliabilityHeader.OrderingIndex, message);
 				WaitHandle.SignalAndWait(_waitEvent, _mainWaitEvent);
 			}
 		}
@@ -530,7 +469,7 @@ namespace MiNET.Client
 					}
 					else
 					{
-						if (Log.IsDebugEnabled) Log.Warn($"{Username} - Wrong sequence. Expected {_lastSequenceNumber + 1}, but was {pair.Key}.");
+						//if (Log.IsDebugEnabled) Log.Warn($"{Username} - Wrong sequence. Expected {_lastSequenceNumber + 1}, but was {pair.Key}.");
 						WaitHandle.SignalAndWait(_mainWaitEvent, _waitEvent, TimeSpan.FromMilliseconds(50), true);
 					}
 				}
@@ -548,29 +487,32 @@ namespace MiNET.Client
 		}
 
 
-		protected virtual void OnUnconnectedPong(UnconnectedPong packet, IPEndPoint senderEndpoint)
+		public virtual void OnUnconnectedPong(UnconnectedPong packet, IPEndPoint senderEndpoint)
 		{
 			Log.Warn($"MOTD: {packet.serverName}");
 			Log.Warn($"from server {senderEndpoint}");
 
-			
+
 			if (!HaveServer)
 			{
 				string[] motdParts = packet.serverName.Split(';');
-				senderEndpoint.Port = int.Parse(motdParts[10]);
+				if (motdParts.Length >= 11)
+				{
+					senderEndpoint.Port = int.Parse(motdParts[10]);
+				}
 				Log.Debug($"Connecting to {senderEndpoint}");
 				ServerEndpoint = senderEndpoint;
 				HaveServer = true;
 				SendOpenConnectionRequest1();
 			}
 		}
-		
-		private void OnOpenConnectionReply2(OpenConnectionReply2 message)
-		{
-			Log.Warn("MTU Size: " + message.mtuSize);
-			Log.Warn("Client Endpoint: " + message.clientEndpoint);
 
-			//_serverEndpoint = message.clientEndpoint;
+		public virtual void OnOpenConnectionReply2(OpenConnectionReply2 message)
+		{
+			Log.Debug("MTU Size: " + message.mtuSize);
+			Log.Debug("Client Endpoint: " + message.clientEndpoint);
+
+			//ServerEndpoint = message.clientEndpoint;
 
 			_mtuSize = message.mtuSize;
 			Thread.Sleep(100);
@@ -578,27 +520,21 @@ namespace MiNET.Client
 		}
 
 
-		private void HandleAck(byte[] receiveBytes, IPEndPoint senderEndpoint)
+		public virtual void HandleAck(ReadOnlyMemory<byte> receiveBytes, IPEndPoint senderEndpoint)
 		{
-			//Log.Info("Ack");
+			//Log.Info($"Ack {Packet.HexDump(receiveBytes)}");
 		}
 
-		private void HandleNak(byte[] receiveBytes, IPEndPoint senderEndpoint)
+		public virtual void HandleNak(ReadOnlyMemory<byte> receiveBytes, IPEndPoint senderEndpoint)
 		{
-			Log.Warn("!! WHAT THE FUK NAK NAK NAK");
+			if (Log.IsDebugEnabled) Log.Warn($"!! WHAT THE FUK NAK NAK NAK, {Packet.HexDump(receiveBytes)}");
 		}
 
-		private void HandleSplitMessage(PlayerNetworkSession playerSession, SplitPartPacket splitMessage)
+		private void HandleSplitMessage(RakSession playerSession, SplitPartPacket splitPart)
 		{
-			int spId = splitMessage.SplitId;
-			int spIdx = splitMessage.SplitIdx;
-			int spCount = splitMessage.SplitCount;
-
-			Int24 sequenceNumber = splitMessage.DatagramSequenceNumber;
-			Reliability reliability = splitMessage.Reliability;
-			Int24 reliableMessageNumber = splitMessage.ReliableMessageNumber;
-			Int24 orderingIndex = splitMessage.OrderingIndex;
-			byte orderingChannel = splitMessage.OrderingChannel;
+			int spId = splitPart.ReliabilityHeader.PartId;
+			int spIdx = splitPart.ReliabilityHeader.PartIndex;
+			int spCount = splitPart.ReliabilityHeader.PartCount;
 
 			SplitPartPacket[] spPackets;
 			bool haveEmpty = false;
@@ -618,7 +554,7 @@ namespace MiNET.Client
 					Log.Debug("Already had splitpart (resent). Ignore this part.");
 					return;
 				}
-				spPackets[spIdx] = splitMessage;
+				spPackets[spIdx] = splitPart;
 
 				for (int i = 0; i < spPackets.Length; i++)
 				{
@@ -630,6 +566,12 @@ namespace MiNET.Client
 			{
 				Log.DebugFormat("Got all {0} split packets for split ID: {1}", spCount, spId);
 
+				
+				Reliability reliability = splitPart.ReliabilityHeader.Reliability;
+				Int24 reliableMessageNumber = splitPart.ReliabilityHeader.ReliableMessageNumber;
+				Int24 orderingIndex = splitPart.ReliabilityHeader.OrderingIndex;
+				byte orderingChannel = splitPart.ReliabilityHeader.OrderingChannel;
+
 				SplitPartPacket[] waste;
 				playerSession.Splits.TryRemove(spId, out waste);
 
@@ -638,39 +580,41 @@ namespace MiNET.Client
 					for (int i = 0; i < spPackets.Length; i++)
 					{
 						SplitPartPacket splitPartPacket = spPackets[i];
-						byte[] buf = splitPartPacket.Message;
-						if (buf == null)
+						var buf = splitPartPacket.Message;
+						if (buf.Length == 0)
 						{
 							Log.Error("Expected bytes in splitpart, but got none");
 							continue;
 						}
 
-						stream.Write(buf, 0, buf.Length);
+						stream.Write(buf.Span);
 						splitPartPacket.PutPool();
 					}
 
 					byte[] buffer = stream.ToArray();
 					try
 					{
-						ConnectedPacket newPacket = ConnectedPacket.CreateObject();
-						newPacket._datagramSequenceNumber = sequenceNumber;
-						newPacket._reliability = reliability;
-						newPacket._reliableMessageNumber = reliableMessageNumber;
-						newPacket._orderingIndex = orderingIndex;
-						newPacket._orderingChannel = (byte) orderingChannel;
-						newPacket._hasSplit = false;
+						var newPacket = ConnectedPacket.CreateObject();
+						newPacket.ReliabilityHeader = new ReliabilityHeader()
+						{
+							Reliability = reliability,
+							ReliableMessageNumber = reliableMessageNumber,
+							OrderingChannel = orderingChannel,
+							OrderingIndex = orderingIndex,
+						};
 
 						Packet fullMessage = PacketFactory.Create(buffer[0], buffer, "raknet") ?? new UnknownPacket(buffer[0], buffer);
-						fullMessage.DatagramSequenceNumber = sequenceNumber;
-						fullMessage.Reliability = reliability;
-						fullMessage.ReliableMessageNumber = reliableMessageNumber;
-						fullMessage.OrderingIndex = orderingIndex;
-						fullMessage.OrderingChannel = orderingChannel;
-
+						fullMessage.ReliabilityHeader = new ReliabilityHeader()
+						{
+							Reliability = reliability,
+							ReliableMessageNumber = reliableMessageNumber,
+							OrderingChannel = orderingChannel,
+							OrderingIndex = orderingIndex,
+						};
 						newPacket.Messages = new List<Packet>();
 						newPacket.Messages.Add(fullMessage);
 
-						Log.Debug($"Assembled split packet {newPacket._reliability} message #{newPacket._reliableMessageNumber}, Chan: #{newPacket._orderingChannel}, OrdIdx: #{newPacket._orderingIndex}");
+						//Log.Debug($"Assembled split packet {newPacket._reliability} message #{newPacket._reliableMessageNumber}, Chan: #{newPacket._orderingChannel}, OrdIdx: #{newPacket._orderingIndex}");
 						HandleConnectedPacket(newPacket);
 						newPacket.PutPool();
 					}
@@ -732,7 +676,7 @@ namespace MiNET.Client
 			}
 		}
 
-		private void OnNoFreeIncomingConnections(NoFreeIncomingConnections message)
+		public virtual void OnNoFreeIncomingConnections(NoFreeIncomingConnections message)
 		{
 			Log.Error($"No free connections from server {message.serverGuid}");
 			StopClient();
@@ -1142,12 +1086,8 @@ namespace MiNET.Client
 			return sb.ToString();
 		}
 
-		public ConcurrentDictionary<long, Entity> Entities { get; private set; } = new ConcurrentDictionary<long, Entity>();
-
 		public string CodeName(string name, bool firstUpper = false)
 		{
-			//name = name.ToLowerInvariant();
-
 			bool upperCase = firstUpper;
 
 			var result = string.Empty;
@@ -1186,7 +1126,7 @@ namespace MiNET.Client
 
 		private int _numberOfChunks = 0;
 
-		public ConcurrentDictionary<Tuple<int, int>, ChunkColumn> _chunks = new ConcurrentDictionary<Tuple<int, int>, ChunkColumn>();
+		public ConcurrentDictionary<ChunkCoordinates, ChunkColumn> Chunks { get; } = new ConcurrentDictionary<ChunkCoordinates, ChunkColumn>();
 		public IndentedTextWriter _mobWriter;
 
 		public virtual void HandleBatch(McpeWrapper batch)
@@ -1197,7 +1137,7 @@ namespace MiNET.Client
 
 
 			// Get bytes
-			byte[] payload = batch.payload;
+			var payload = batch.payload;
 
 			if (Session.CryptoContext != null && Session.CryptoContext.UseEncryption)
 			{
@@ -1205,7 +1145,7 @@ namespace MiNET.Client
 				payload = CryptoUtils.Decrypt(payload, Session.CryptoContext);
 			}
 
-			MemoryStream stream = new MemoryStream(payload);
+			var stream = new MemoryStreamReader(payload.Slice(0, payload.Length - 4)); // slice away adler
 			if (stream.ReadByte() != 0x78)
 			{
 				throw new InvalidDataException("Incorrect ZLib header. Expected 0x78 0x9C");
@@ -1255,35 +1195,41 @@ namespace MiNET.Client
 
 			foreach (var msg in messages)
 			{
-				msg.DatagramSequenceNumber = batch.DatagramSequenceNumber;
-				msg.OrderingChannel = batch.OrderingChannel;
-				msg.OrderingIndex = batch.OrderingIndex;
+				msg.ReliabilityHeader = new ReliabilityHeader()
+				{
+					Reliability = batch.ReliabilityHeader.Reliability,
+					ReliableMessageNumber = batch.ReliabilityHeader.ReliableMessageNumber,
+					OrderingChannel = batch.ReliabilityHeader.OrderingChannel,
+					OrderingIndex = batch.ReliabilityHeader.OrderingIndex,
+				};
 				HandlePacket(msg);
 				msg.PutPool();
 			}
 		}
 
-		public void SendPacket(Packet message, short mtuSize, ref int reliableMessageNumber)
+		public async Task SendPacketAsync(Packet message)
 		{
 			if (message == null) return;
 
 			TraceSend(message);
 
-			foreach (var datagram in Datagram.CreateDatagrams(message, mtuSize, Session))
+			foreach (Datagram datagram in Datagram.CreateDatagrams(message, _mtuSize, Session))
 			{
-				SendDatagram(Session, datagram);
+				await SendDatagramAsync(datagram);
 			}
 		}
 
-		private void SendDatagram(PlayerNetworkSession session, Datagram datagram)
+		private async Task SendDatagramAsync(Datagram datagram)
 		{
-			if (datagram.MessageParts.Count != 0)
+			if (datagram.MessageParts.Count > 0)
 			{
-				datagram.Header.datagramSequenceNumber = Interlocked.Increment(ref Session.DatagramSequenceNumber);
-				byte[] data = datagram.Encode();
-				datagram.PutPool();
+				datagram.Header.DatagramSequenceNumber = Interlocked.Increment(ref Session.DatagramSequenceNumber);
 
-				SendData(data, ServerEndpoint);
+				byte[] buffer = ArrayPool<byte>.Shared.Rent(1600);
+				int length = (int) datagram.GetEncoded(ref buffer);
+
+				await SendDataAsync(buffer, length, ServerEndpoint);
+				ArrayPool<byte>.Shared.Return(buffer);
 			}
 		}
 
@@ -1303,6 +1249,21 @@ namespace MiNET.Client
 			try
 			{
 				UdpClient.Send(data, data.Length, targetEndpoint);
+			}
+			catch (Exception e)
+			{
+				Log.Debug("Send exception", e);
+			}
+		}
+
+		private async Task SendDataAsync(byte[] data, int length, IPEndPoint targetEndpoint)
+		{
+			if (UdpClient == null)
+				return;
+
+			try
+			{
+				await UdpClient.SendAsync(data, length, targetEndpoint);
 			}
 			catch (Exception e)
 			{
@@ -1340,7 +1301,6 @@ namespace MiNET.Client
 				var jsonSerializerSettings = new JsonSerializerSettings
 				{
 					PreserveReferencesHandling = PreserveReferencesHandling.All,
-
 					Formatting = Formatting.Indented,
 				};
 				jsonSerializerSettings.Converters.Add(new StringEnumConverter());
@@ -1389,7 +1349,6 @@ namespace MiNET.Client
 				var jsonSerializerSettings = new JsonSerializerSettings
 				{
 					PreserveReferencesHandling = PreserveReferencesHandling.All,
-
 					Formatting = Formatting.Indented,
 				};
 				jsonSerializerSettings.Converters.Add(new StringEnumConverter());
@@ -1405,7 +1364,6 @@ namespace MiNET.Client
 			{
 				Log.Debug($"<    Send: {message.Id} (0x{message.Id:x2}): {message.GetType().Name}\n{Packet.HexDump(message.Bytes)}");
 			}
-
 		}
 
 		public void SendUnconnectedPing()
@@ -1431,10 +1389,7 @@ namespace MiNET.Client
 
 		public void SendConnectedPing()
 		{
-			var packet = new ConnectedPing()
-			{
-				sendpingtime = DateTime.UtcNow.Ticks
-			};
+			var packet = new ConnectedPing() {sendpingtime = DateTime.UtcNow.Ticks};
 
 			SendPacket(packet);
 		}
@@ -1471,7 +1426,7 @@ namespace MiNET.Client
 			SendData(data2);
 		}
 
-		public void SendOpenConnectionRequest2()
+		public virtual void SendOpenConnectionRequest2()
 		{
 			//_clientGuid = new Random().Next() + new Random().Next();
 			var packet = new OpenConnectionRequest2()
@@ -1502,7 +1457,7 @@ namespace MiNET.Client
 
 		public void SendPacket(Packet packet)
 		{
-			SendPacket(packet, _mtuSize, ref _reliableMessageNumber);
+			SendPacketAsync(packet).Wait();
 			packet.PutPool();
 		}
 
@@ -1533,7 +1488,10 @@ namespace MiNET.Client
 		{
 			if (CurrentLocation == null) return;
 
-			McpeMovePlayer movePlayerPacket = McpeMovePlayer.CreateObject();
+			if (CurrentLocation.Y < 0)
+				CurrentLocation.Y = 64f;
+
+			var movePlayerPacket = McpeMovePlayer.CreateObject();
 			movePlayerPacket.runtimeEntityId = EntityId;
 			movePlayerPacket.x = CurrentLocation.X;
 			movePlayerPacket.y = CurrentLocation.Y;
@@ -1541,8 +1499,32 @@ namespace MiNET.Client
 			movePlayerPacket.yaw = CurrentLocation.Yaw;
 			movePlayerPacket.pitch = CurrentLocation.Pitch;
 			movePlayerPacket.headYaw = CurrentLocation.HeadYaw;
+			movePlayerPacket.mode = 1;
+			movePlayerPacket.onGround = false;
 
 			SendPacket(movePlayerPacket);
+		}
+
+		public async Task SendCurrentPlayerPositionAsync()
+		{
+			if (CurrentLocation == null)
+				return;
+
+			if (CurrentLocation.Y < 0)
+				CurrentLocation.Y = 64f;
+
+			var movePlayerPacket = McpeMovePlayer.CreateObject();
+			movePlayerPacket.runtimeEntityId = EntityId;
+			movePlayerPacket.x = CurrentLocation.X;
+			movePlayerPacket.y = CurrentLocation.Y;
+			movePlayerPacket.z = CurrentLocation.Z;
+			movePlayerPacket.yaw = CurrentLocation.Yaw;
+			movePlayerPacket.pitch = CurrentLocation.Pitch;
+			movePlayerPacket.headYaw = CurrentLocation.HeadYaw;
+			movePlayerPacket.mode = 1;
+			movePlayerPacket.onGround = false;
+
+			await SendPacketAsync(movePlayerPacket);
 		}
 
 

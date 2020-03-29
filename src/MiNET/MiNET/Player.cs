@@ -24,6 +24,7 @@
 #endregion
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -42,6 +43,7 @@ using MiNET.Entities.Passive;
 using MiNET.Entities.World;
 using MiNET.Items;
 using MiNET.Net;
+using MiNET.Net.RakNet;
 using MiNET.Particles;
 using MiNET.UI;
 using MiNET.Utils;
@@ -489,12 +491,12 @@ namespace MiNET
 
 		public virtual void HandleMcpeSetEntityMotion(McpeSetEntityMotion message)
 		{
-			Level.RelayBroadcast((McpeSetEntityMotion) message.Clone());
+			//Level.RelayBroadcast((McpeSetEntityMotion) message.Clone());
 		}
 
 		public void HandleMcpeMoveEntity(McpeMoveEntity message)
 		{
-			Level.RelayBroadcast((McpeMoveEntity) message.Clone());
+			//Level.RelayBroadcast((McpeMoveEntity) message.Clone());
 			if (Level.TryGetEntity(message.runtimeEntityId, out Entity entity))
 			{
 				entity.KnownPosition = message.position;
@@ -772,7 +774,7 @@ namespace MiNET
 			mcpeAdventureSettings.actionPermissions = (uint) ActionPermissions;
 			mcpeAdventureSettings.permissionLevel = (uint) PermissionLevel;
 			mcpeAdventureSettings.customStoredPermissions = (uint) 0;
-			mcpeAdventureSettings.userId = Endian.SwapInt64(EntityId);
+			mcpeAdventureSettings.userId = BinaryPrimitives.ReverseEndianness(EntityId);
 
 			SendPacket(mcpeAdventureSettings);
 		}
@@ -1345,8 +1347,8 @@ namespace MiNET
 						b &= level.IsBlock(coord.BlockDown(), obsidionId);
 						if (b)
 						{
-							Portal portal = (Portal) level.GetBlock(coord);
-							if (portal.Metadata >= 2)
+							var portal = (Portal) level.GetBlock(coord);
+							if (portal.PortalAxis == "z")
 							{
 								b &= level.IsBlock(coord.BlockNorth(), portalId);
 							}
@@ -1355,7 +1357,7 @@ namespace MiNET
 								b &= level.IsBlock(coord.BlockEast(), portalId);
 							}
 
-							Log.Debug($"Found portal block at {coord}, direction={portal.Metadata}");
+							Log.Debug($"Found portal block at {coord}, axis={portal.PortalAxis}");
 							if (b && coord.DistanceTo(start) < closestDistance)
 							{
 								Log.Debug($"Found a closer portal at {coord}");
@@ -1498,7 +1500,11 @@ namespace MiNET
 							}
 							else
 							{
-								level.SetBlock(new Portal {Coordinates = coordinates});
+								level.SetBlock(new Portal
+								{
+									Coordinates = coordinates,
+									PortalAxis = "x"
+								});
 								if (!haveSetCoordinate)
 								{
 									haveSetCoordinate = true;
@@ -1517,7 +1523,7 @@ namespace MiNET
 								level.SetBlock(new Portal
 								{
 									Coordinates = coordinates,
-									Metadata = 2
+									PortalAxis = "z",
 								});
 								if (!haveSetCoordinate)
 								{
@@ -1547,7 +1553,7 @@ namespace MiNET
 				{
 					for (int y = min.Y; y < max.Y; y++)
 					{
-						//if (z == min.Z) if (!Level.GetBlock(new BlockCoordinates(x, y, z)).IsBuildable) return false;
+						//if (z == min.Z) if (!Level.GetBlockId(new BlockCoordinates(x, y, z)).IsBuildable) return false;
 						if (y == min.Y)
 						{
 							if (!Level.GetBlock(new BlockCoordinates(x, y, z)).IsBuildable) return false;
@@ -1666,7 +1672,6 @@ namespace MiNET
 			McpeSetEntityData mcpeSetEntityData = McpeSetEntityData.CreateObject();
 			mcpeSetEntityData.runtimeEntityId = EntityManager.EntityIdSelf;
 			mcpeSetEntityData.metadata = metadata;
-			mcpeSetEntityData.Encode();
 			SendPacket(mcpeSetEntityData);
 
 			base.BroadcastSetEntityData(metadata);
@@ -1677,7 +1682,6 @@ namespace MiNET
 			McpeSetEntityData mcpeSetEntityData = McpeSetEntityData.CreateObject();
 			mcpeSetEntityData.runtimeEntityId = EntityManager.EntityIdSelf;
 			mcpeSetEntityData.metadata = GetMetadata();
-			mcpeSetEntityData.Encode();
 			SendPacket(mcpeSetEntityData);
 		}
 
@@ -1786,7 +1790,7 @@ namespace MiNET
 
 						if (sendDisconnect)
 						{
-							McpeDisconnect disconnect = McpeDisconnect.CreateObject();
+							var disconnect = McpeDisconnect.CreateObject();
 							disconnect.NoBatch = true;
 							disconnect.message = reason;
 							NetworkHandler.SendDirectPacket(disconnect);
@@ -1839,7 +1843,6 @@ namespace MiNET
 			Level.BroadcastMessage(text, sender: this);
 		}
 
-		private int _lastPlayerMoveSequenceNUmber;
 		private int _lastOrderingIndex;
 		private object _moveSyncLock = new object();
 
@@ -1851,23 +1854,12 @@ namespace MiNET
 			{
 				lock (_moveSyncLock)
 				{
-					if (_lastPlayerMoveSequenceNUmber > message.DatagramSequenceNumber)
-					{
-						return;
-					}
-
-					_lastPlayerMoveSequenceNUmber = message.DatagramSequenceNumber;
-
-					if (_lastOrderingIndex > message.OrderingIndex)
-					{
-						return;
-					}
-
-					_lastOrderingIndex = message.OrderingIndex;
+					if (_lastOrderingIndex > message.ReliabilityHeader.OrderingIndex) return;
+					_lastOrderingIndex = message.ReliabilityHeader.OrderingIndex;
 				}
 			}
 
-			Vector3 origin = KnownPosition.ToVector3();
+			var origin = KnownPosition.ToVector3();
 			double distanceTo = Vector3.Distance(origin, new Vector3(message.x, message.y - 1.62f, message.z));
 
 			CurrentSpeed = distanceTo / ((double) (DateTime.UtcNow - LastUpdatedTime).Ticks / TimeSpan.TicksPerSecond);
@@ -2304,7 +2296,8 @@ namespace MiNET
 				}
 				case McpeInventoryTransaction.ItemUseAction.Destroy:
 				{
-					Level.BreakBlock(this, transaction.Position);
+					//TODO: Add face and other parameters to break. For logic in break block.
+					Level.BreakBlock(this, transaction.Position, (BlockFace) transaction.Face);
 					break;
 				}
 			}
@@ -2635,8 +2628,6 @@ namespace MiNET
 				{
 					_openInventory = null;
 
-					if (inventory == null) return;
-
 					// unsubscribe to inventory changes
 					inventory.InventoryChange -= OnInventoryChange;
 					inventory.RemoveObserver(this);
@@ -2727,8 +2718,8 @@ namespace MiNET
 			}
 
 			Block block = Level.GetBlock(message.x, message.y, message.z);
-
-			Item item = ItemFactory.GetItem((short) block.Id, block.Metadata);
+			Item item = block.GetItem();
+			if (item == null) return;
 
 			Inventory.SetInventorySlot(Inventory.InHandSlot, item);
 		}
@@ -2863,7 +2854,7 @@ namespace MiNET
 			startGame.gameVersion = "";
 			startGame.isServerSideMovementEnabled = false;
 
-			startGame.blockPallet = BlockFactory.BlockPallet;
+			startGame.blockPalette = BlockFactory.BlockPalette;
 			startGame.itemstates = ItemFactory.Itemstates;
 
 			SendPacket(startGame);
@@ -3304,16 +3295,16 @@ namespace MiNET
 			DisplayName = displayName;
 
 			{
-				McpePlayerList playerList = McpePlayerList.CreateObject();
+				var playerList = McpePlayerList.CreateObject();
 				playerList.records = new PlayerRemoveRecords {this};
-				Level.RelayBroadcast(Level.CreateMcpeBatch(playerList.Encode()));
+				Level.RelayBroadcast(Level.CreateMcpeBatch(playerList.Encode())); // Replace with records, to remove need for player and encode
 				playerList.records = null;
 				playerList.PutPool();
 			}
 			{
-				McpePlayerList playerList = McpePlayerList.CreateObject();
+				var playerList = McpePlayerList.CreateObject();
 				playerList.records = new PlayerAddRecords {this};
-				Level.RelayBroadcast(Level.CreateMcpeBatch(playerList.Encode()));
+				Level.RelayBroadcast(Level.CreateMcpeBatch(playerList.Encode())); // Replace with records, to remove need for player and encode
 				playerList.records = null;
 				playerList.PutPool();
 			}

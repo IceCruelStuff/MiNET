@@ -3,10 +3,10 @@
 // The contents of this file are subject to the Common Public Attribution
 // License Version 1.0. (the "License"); you may not use this file except in
 // compliance with the License. You may obtain a copy of the License at
-// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE. 
-// The License is based on the Mozilla Public License Version 1.1, but Sections 14 
-// and 15 have been added to cover use of software over a computer network and 
-// provide for limited attribution for the Original Developer. In addition, Exhibit A has 
+// https://github.com/NiclasOlofsson/MiNET/blob/master/LICENSE.
+// The License is based on the Mozilla Public License Version 1.1, but Sections 14
+// and 15 have been added to cover use of software over a computer network and
+// provide for limited attribution for the Original Developer. In addition, Exhibit A has
 // been modified to be consistent with Exhibit B.
 // 
 // Software distributed under the License is distributed on an "AS IS" basis,
@@ -18,12 +18,14 @@
 // The Original Developer is the Initial Developer.  The Initial Developer of
 // the Original Code is Niclas Olofsson.
 // 
-// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2018 Niclas Olofsson. 
+// All portions of the code written by Niclas Olofsson are Copyright (c) 2014-2020 Niclas Olofsson.
 // All Rights Reserved.
 
 #endregion
 
 using System;
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -35,8 +37,10 @@ using System.Text;
 using System.Threading;
 using fNbt;
 using log4net;
+using Microsoft.IO;
 using MiNET.Crafting;
 using MiNET.Items;
+using MiNET.Net.RakNet;
 using MiNET.Utils;
 using MiNET.Utils.Skins;
 using Newtonsoft.Json;
@@ -50,39 +54,29 @@ namespace MiNET.Net
 		private bool _isEncoded;
 		private byte[] _encodedMessage;
 
-		[JsonIgnore] public int DatagramSequenceNumber;
-
 		[JsonIgnore] public bool NoBatch { get; set; }
 
-		[JsonIgnore] public Reliability Reliability = Reliability.Unreliable;
-		[JsonIgnore] public int ReliableMessageNumber;
-		[JsonIgnore] public byte OrderingChannel;
-		[JsonIgnore] public int OrderingIndex;
+		[JsonIgnore] public ReliabilityHeader ReliabilityHeader = new ReliabilityHeader();
+		//[JsonIgnore] public Reliability Reliability = Reliability.Unreliable;
+		//[JsonIgnore] public int ReliableMessageNumber;
+		//[JsonIgnore] public byte OrderingChannel;
+		//[JsonIgnore] public int OrderingIndex;
 
 		[JsonIgnore] public bool ForceClear;
 
 		[JsonIgnore] public byte Id;
 		[JsonIgnore] public bool IsMcpe;
 
-		protected MemoryStream _buffer;
+		protected MemoryStreamReader _reader; // new construct for reading
+		protected Stream _buffer;
 		private BinaryWriter _writer;
-		private BinaryReader _reader;
-		private Stopwatch _timer = new Stopwatch();
 
-		[JsonIgnore] public byte[] Bytes { get; private set; }
+		[JsonIgnore] public ReadOnlyMemory<byte> Bytes { get; private set; }
+		[JsonIgnore] public Stopwatch Timer { get; } = Stopwatch.StartNew();
 
 		public Packet()
 		{
-			_buffer = new MemoryStream();
-			_reader = new BinaryReader(_buffer);
-			_writer = new BinaryWriter(_buffer);
 			Timer.Start();
-		}
-
-		[JsonIgnore]
-		public Stopwatch Timer
-		{
-			get { return _timer; }
 		}
 
 		public void Write(byte value)
@@ -92,7 +86,7 @@ namespace MiNET.Net
 
 		public byte ReadByte()
 		{
-			return _reader.ReadByte();
+			return (byte) _reader.ReadByte();
 		}
 
 		public void Write(bool value)
@@ -107,12 +101,16 @@ namespace MiNET.Net
 
 		public void Write(Memory<byte> value)
 		{
+			Write((ReadOnlyMemory<byte>) value);
+		}
+
+		public void Write(ReadOnlyMemory<byte> value)
+		{
 			if (value.IsEmpty)
 			{
 				Log.Warn("Trying to write empty Memory<byte>");
 				return;
 			}
-
 			_writer.Write(value.Span);
 		}
 
@@ -127,18 +125,37 @@ namespace MiNET.Net
 			_writer.Write(value);
 		}
 
+		public ReadOnlyMemory<byte> Slice(int count)
+		{
+			return _reader.Read(count);
+		}
+
+		public ReadOnlyMemory<byte> ReadReadOnlyMemory(int count, bool slurp = false)
+		{
+			if (!slurp && count == 0) return Memory<byte>.Empty;
+
+			if (count == 0)
+			{
+				count = (int) (_reader.Length - _reader.Position);
+			}
+
+			ReadOnlyMemory<byte> readBytes = _reader.Read(count);
+			if (readBytes.Length != count) throw new ArgumentOutOfRangeException($"Expected {count} bytes, only read {readBytes.Length}.");
+			return readBytes;
+		}
+
 		public byte[] ReadBytes(int count, bool slurp = false)
 		{
 			if (!slurp && count == 0) return new byte[0];
 
 			if (count == 0)
 			{
-				count = (int) (_reader.BaseStream.Length - _reader.BaseStream.Position);
+				count = (int) (_reader.Length - _reader.Position);
 			}
 
-			var readBytes = _reader.ReadBytes(count);
+			ReadOnlyMemory<byte> readBytes = _reader.Read(count);
 			if (readBytes.Length != count) throw new ArgumentOutOfRangeException($"Expected {count} bytes, only read {readBytes.Length}.");
-			return readBytes;
+			return readBytes.ToArray(); //TODO: Replace with ReadOnlyMemory<byte> return
 		}
 
 		public void WriteByteArray(byte[] value)
@@ -165,44 +182,44 @@ namespace MiNET.Net
 
 		public void Write(short value, bool bigEndian = false)
 		{
-			if (bigEndian) _writer.Write(Endian.SwapInt16(value));
+			if (bigEndian) _writer.Write(BinaryPrimitives.ReverseEndianness(value));
 			else _writer.Write(value);
 		}
 
 		public short ReadShort(bool bigEndian = false)
 		{
-			if (_reader.BaseStream.Position == _reader.BaseStream.Length) return 0;
+			if (_reader.Position == _reader.Length) return 0;
 
-			if (bigEndian) return Endian.SwapInt16(_reader.ReadInt16());
+			if (bigEndian) return BinaryPrimitives.ReverseEndianness(_reader.ReadInt16());
 
 			return _reader.ReadInt16();
 		}
 
 		public void Write(ushort value, bool bigEndian = false)
 		{
-			if (bigEndian) _writer.Write(Endian.SwapUInt16(value));
+			if (bigEndian) _writer.Write(BinaryPrimitives.ReverseEndianness(value));
 			else _writer.Write(value);
 		}
 
 		public ushort ReadUshort(bool bigEndian = false)
 		{
-			if (_reader.BaseStream.Position == _reader.BaseStream.Length) return 0;
+			if (_reader.Position == _reader.Length) return 0;
 
-			if (bigEndian) return Endian.SwapUInt16(_reader.ReadUInt16());
+			if (bigEndian) return BinaryPrimitives.ReverseEndianness(_reader.ReadUInt16());
 
 			return _reader.ReadUInt16();
 		}
 
 		public void WriteBe(short value)
 		{
-			_writer.Write(Endian.SwapInt16(value));
+			_writer.Write(BinaryPrimitives.ReverseEndianness(value));
 		}
 
 		public short ReadShortBe()
 		{
-			if (_reader.BaseStream.Position == _reader.BaseStream.Length) return 0;
+			if (_reader.Position == _reader.Length) return 0;
 
-			return Endian.SwapInt16(_reader.ReadInt16());
+			return BinaryPrimitives.ReverseEndianness(_reader.ReadInt16());
 		}
 
 		public void Write(Int24 value)
@@ -212,30 +229,30 @@ namespace MiNET.Net
 
 		public Int24 ReadLittle()
 		{
-			return new Int24(_reader.ReadBytes(3));
+			return new Int24(_reader.Read(3).Span);
 		}
 
 		public void Write(int value, bool bigEndian = false)
 		{
-			if (bigEndian) _writer.Write(Endian.SwapInt32(value));
+			if (bigEndian) _writer.Write(BinaryPrimitives.ReverseEndianness(value));
 			else _writer.Write(value);
 		}
 
 		public int ReadInt(bool bigEndian = false)
 		{
-			if (bigEndian) return Endian.SwapInt32(_reader.ReadInt32());
+			if (bigEndian) return BinaryPrimitives.ReverseEndianness(_reader.ReadInt32());
 
 			return _reader.ReadInt32();
 		}
 
 		public void WriteBe(int value)
 		{
-			_writer.Write(Endian.SwapInt32(value));
+			_writer.Write(BinaryPrimitives.ReverseEndianness(value));
 		}
 
 		public int ReadIntBe()
 		{
-			return Endian.SwapInt32(_reader.ReadInt32());
+			return BinaryPrimitives.ReverseEndianness(_reader.ReadInt32());
 		}
 
 		public void Write(uint value)
@@ -256,7 +273,7 @@ namespace MiNET.Net
 
 		public int ReadVarInt()
 		{
-			return VarInt.ReadInt32(_buffer);
+			return VarInt.ReadInt32(_reader);
 		}
 
 		public void WriteSignedVarInt(int value)
@@ -266,7 +283,7 @@ namespace MiNET.Net
 
 		public int ReadSignedVarInt()
 		{
-			return VarInt.ReadSInt32(_buffer);
+			return VarInt.ReadSInt32(_reader);
 		}
 
 		public void WriteUnsignedVarInt(uint value)
@@ -276,12 +293,12 @@ namespace MiNET.Net
 
 		public uint ReadUnsignedVarInt()
 		{
-			return VarInt.ReadUInt32(_buffer);
+			return VarInt.ReadUInt32(_reader);
 		}
 
 		public int ReadLength()
 		{
-			return (int) VarInt.ReadUInt32(_buffer);
+			return (int) VarInt.ReadUInt32(_reader);
 		}
 
 		public void WriteLength(int value)
@@ -296,7 +313,7 @@ namespace MiNET.Net
 
 		public long ReadVarLong()
 		{
-			return VarInt.ReadInt64(_buffer);
+			return VarInt.ReadInt64(_reader);
 		}
 
 		public void WriteEntityId(long value)
@@ -311,7 +328,7 @@ namespace MiNET.Net
 
 		public long ReadSignedVarLong()
 		{
-			return VarInt.ReadSInt64(_buffer);
+			return VarInt.ReadSInt64(_reader);
 		}
 
 		public void WriteRuntimeEntityId(long value)
@@ -328,17 +345,17 @@ namespace MiNET.Net
 		public long ReadUnsignedVarLong()
 		{
 			// Need to fix this to ulong later
-			return (long) VarInt.ReadUInt64(_buffer);
+			return (long) VarInt.ReadUInt64(_reader);
 		}
 
 		public void Write(long value)
 		{
-			_writer.Write(Endian.SwapInt64(value));
+			_writer.Write(BinaryPrimitives.ReverseEndianness(value));
 		}
 
 		public long ReadLong()
 		{
-			return Endian.SwapInt64(_reader.ReadInt64());
+			return BinaryPrimitives.ReverseEndianness(_reader.ReadInt64());
 		}
 
 		public void Write(ulong value)
@@ -385,7 +402,7 @@ namespace MiNET.Net
 
 		public string ReadString()
 		{
-			if (_reader.BaseStream.Position == _reader.BaseStream.Length) return string.Empty;
+			if (_reader.Position == _reader.Length) return string.Empty;
 			int len = ReadLength();
 			if (len <= 0) return string.Empty;
 			return Encoding.UTF8.GetString(ReadBytes(len));
@@ -407,10 +424,10 @@ namespace MiNET.Net
 
 		public string ReadFixedString()
 		{
-			if (_reader.BaseStream.Position == _reader.BaseStream.Length) return string.Empty;
+			if (_reader.Position == _reader.Length) return string.Empty;
 			short len = ReadShort(true);
 			if (len <= 0) return string.Empty;
-			return Encoding.UTF8.GetString(ReadBytes(len));
+			return Encoding.UTF8.GetString(_reader.Read(len).Span);
 		}
 
 		public void Write(Vector2 vec)
@@ -504,7 +521,7 @@ namespace MiNET.Net
 						ReadBool(); // is host
 
 						records.Add(player);
-						Log.Warn($"Reading {player.ClientUuid}, {player.EntityId}, '{player.DisplayName}', {platformChatId}");
+						Log.Debug($"Reading {player.ClientUuid}, {player.EntityId}, '{player.DisplayName}', {platformChatId}");
 					}
 					break;
 				case 1:
@@ -634,7 +651,7 @@ namespace MiNET.Net
 
 		public IPEndPoint[] ReadIPEndPoints(int count)
 		{
-			if (count == 20 && _reader.BaseStream.Length < 120) count = 10;
+			if (count == 20 && _reader.Length < 120) count = 10;
 			var endPoints = new IPEndPoint[count];
 			for (int i = 0; i < endPoints.Length; i++)
 			{
@@ -674,7 +691,7 @@ namespace MiNET.Net
 
 		public Nbt ReadNbt()
 		{
-			return ReadNbt(_reader.BaseStream);
+			return ReadNbt(_reader);
 		}
 
 		public static Nbt ReadNbt(Stream stream)
@@ -809,7 +826,7 @@ namespace MiNET.Net
 				case InventoryMismatchTransaction _:
 					break;
 				case ItemUseTransaction t:
-					WriteVarInt((int)t.ActionType);
+					WriteVarInt((int) t.ActionType);
 					Write(t.Position);
 					WriteSignedVarInt(t.Face);
 					WriteSignedVarInt(t.Slot);
@@ -849,32 +866,20 @@ namespace MiNET.Net
 				switch ((McpeInventoryTransaction.InventorySourceType) sourceType)
 				{
 					case McpeInventoryTransaction.InventorySourceType.Container:
-						record = new ContainerTransactionRecord()
-						{
-							InventoryId = ReadSignedVarInt()
-						};
+						record = new ContainerTransactionRecord() {InventoryId = ReadSignedVarInt()};
 						break;
 					case McpeInventoryTransaction.InventorySourceType.Global:
 						record = new GlobalTransactionRecord();
 						break;
 					case McpeInventoryTransaction.InventorySourceType.WorldInteraction:
-						record = new WorldInteractionTransactionRecord()
-						{
-							Flags = ReadVarInt()
-						};
+						record = new WorldInteractionTransactionRecord() {Flags = ReadVarInt()};
 						break;
 					case McpeInventoryTransaction.InventorySourceType.Creative:
-						record = new CreativeTransactionRecord()
-						{
-							InventoryId = 0x79
-						};
+						record = new CreativeTransactionRecord() {InventoryId = 0x79};
 						break;
 					case McpeInventoryTransaction.InventorySourceType.Unspecified:
 					case McpeInventoryTransaction.InventorySourceType.Crafting:
-						record = new CraftTransactionRecord()
-						{
-							Action = (McpeInventoryTransaction.CraftingAction) ReadSignedVarInt()
-						};
+						record = new CraftTransactionRecord() {Action = (McpeInventoryTransaction.CraftingAction) ReadSignedVarInt()};
 						break;
 					default:
 						Log.Error($"Unknown inventory source type={sourceType}");
@@ -912,7 +917,6 @@ namespace MiNET.Net
 				case McpeInventoryTransaction.TransactionType.ItemUseOnEntity:
 					transaction = new ItemUseOnEntityTransaction()
 					{
-
 						EntityId = ReadVarLong(),
 						ActionType = (McpeInventoryTransaction.ItemUseOnEntityAction) ReadVarInt(),
 						Slot = ReadSignedVarInt(),
@@ -953,7 +957,7 @@ namespace MiNET.Net
 			if (stack.ExtraData != null)
 			{
 				byte[] bytes = GetNbtData(stack.ExtraData);
-				Write((ushort)0xffff);//(short) bytes.Length
+				Write((ushort) 0xffff); //(short) bytes.Length
 				Write((byte) 0x01);
 				Write(bytes);
 			}
@@ -969,7 +973,6 @@ namespace MiNET.Net
 			{
 				WriteSignedVarInt(0); // something about tick, crap code
 			}
-
 		}
 
 		public Item ReadItem()
@@ -1003,7 +1006,7 @@ namespace MiNET.Net
 				ReadString();
 			}
 
-			if(id == 513) // shield
+			if (id == 513) // shield
 			{
 				ReadSignedVarInt(); // something about tick, crap code
 			}
@@ -1032,7 +1035,11 @@ namespace MiNET.Net
 
 		public MetadataDictionary ReadMetadataDictionary()
 		{
-			return MetadataDictionary.FromStream(_reader);
+			//_buffer.Position = _reader.Position;
+			var reader = new BinaryReader(_reader);
+			var dictionary = MetadataDictionary.FromStream(reader);
+			//_reader.Position = (int) _buffer.Position;
+			return dictionary;
 		}
 
 		public PlayerAttributes ReadPlayerAttributes()
@@ -1194,7 +1201,7 @@ namespace MiNET.Net
 
 		public void Write(Itemstates itemstates)
 		{
-			if(itemstates == null)
+			if (itemstates == null)
 			{
 				WriteUnsignedVarInt(0);
 				return;
@@ -1207,9 +1214,9 @@ namespace MiNET.Net
 			}
 		}
 
-		public BlockPallet ReadBlockPallet()
+		public BlockPalette ReadBlockPalette()
 		{
-			var result = new BlockPallet();
+			var result = new BlockPalette();
 
 			var nbt = new Nbt();
 			var file = new NbtFile();
@@ -1217,39 +1224,48 @@ namespace MiNET.Net
 			file.UseVarInt = true;
 			file.AllowAlternativeRootTag = true;
 			nbt.NbtFile = file;
-			file.LoadFromStream(_writer.BaseStream, NbtCompression.None);
+
+			file.LoadFromStream(_reader, NbtCompression.None);
 
 			int runtimeId = 0;
 			var rootTag = (NbtList) file.RootTag;
 			foreach (NbtTag tag in rootTag)
 			{
-				var record = new BlockRecord();
+				var record = new BlockStateContainer();
 				record.RuntimeId = runtimeId++;
 				record.Id = tag["id"].ShortValue;
 
 				var blockTag = (NbtCompound) tag["block"];
 				record.Name = blockTag["name"].StringValue;
-				if(blockTag.Contains("data")) record.Data = blockTag["data"].ShortValue;
+				if (blockTag.Contains("data")) record.Data = blockTag["data"].ShortValue;
 
-				record.States = new List<BlockState>();
+				record.States = new List<IBlockState>();
 				var states = (NbtCompound) blockTag["states"];
 				foreach (NbtTag stateTag in states)
 				{
-					var state = new BlockState();
-					state.Name = stateTag.Name;
+					IBlockState state = null;
 					switch (stateTag.TagType)
 					{
 						case NbtTagType.Byte:
-							state.Type = (byte) NbtTagType.Byte;
-							state.Value = stateTag.ByteValue.ToString();
+							state = new BlockStateByte()
+							{
+								Name = stateTag.Name,
+								Value = stateTag.ByteValue
+							};
 							break;
 						case NbtTagType.Int:
-							state.Type = (byte) NbtTagType.Int;
-							state.Value = stateTag.IntValue.ToString();
+							state = new BlockStateInt()
+							{
+								Name = stateTag.Name,
+								Value = stateTag.IntValue
+							};
 							break;
 						case NbtTagType.String:
-							state.Type = (byte) NbtTagType.String;
-							state.Value = stateTag.StringValue.ToString();
+							state = new BlockStateString()
+							{
+								Name = stateTag.Name,
+								Value = stateTag.StringValue
+							};
 							break;
 						default:
 							throw new ArgumentOutOfRangeException();
@@ -1263,9 +1279,59 @@ namespace MiNET.Net
 			return result;
 		}
 
-		public void Write(BlockPallet blockPallet)
+		public void Write(BlockPalette palette)
 		{
-			Write((byte[]) blockPallet);
+			var list = new NbtList("", NbtTagType.Compound);
+			foreach (BlockStateContainer record in palette)
+			{
+				var states = new List<NbtTag>();
+				foreach (IBlockState state in record.States)
+				{
+					NbtTag stateTag = null;
+					switch (state)
+					{
+						case BlockStateByte blockStateByte:
+							stateTag = new NbtByte(state.Name, blockStateByte.Value);
+							break;
+						case BlockStateInt blockStateInt:
+							stateTag = new NbtInt(state.Name, blockStateInt.Value);
+							break;
+						case BlockStateString blockStateString:
+							stateTag = new NbtString(state.Name, blockStateString.Value);
+							break;
+						default:
+							throw new ArgumentOutOfRangeException(nameof(state));
+					}
+
+					states.Add(stateTag);
+				}
+
+				var recordTag = new NbtCompound()
+				{
+					new NbtShort("id", (short) record.Data),
+					new NbtShort("data", (short) record.Id),
+					new NbtCompound("block")
+					{
+						new NbtString("name", record.Name),
+						new NbtCompound("states", states),
+						new NbtInt("version", BlockPalette.Version),
+					}
+				};
+
+				list.Add(recordTag);
+			}
+
+			// Get bytes
+			var nbt = new NbtFile()
+			{
+				BigEndian = false,
+				UseVarInt = true,
+				RootTag = list
+			};
+
+			byte[] nbtBinary = nbt.SaveToBuffer(NbtCompression.None);
+
+			Write(nbtBinary);
 		}
 
 		public void Write(Links links)
@@ -1519,12 +1585,12 @@ namespace MiNET.Net
 			skin.Cape.Id = ReadString();
 			ReadString(); // some unique skin id
 
-			Log.Debug($"SkinId={skin.SkinId}");
-			Log.Debug($"SkinData lenght={skin.Data.Length}");
-			Log.Debug($"CapeData lenght={skin.Cape.Data.Length}");
-			Log.Debug("\n" + HexDump(skin.Cape.Data));
-			Log.Debug($"SkinGeometryName={skin.GeometryName}");
-			Log.Debug($"SkinGeometry lenght={skin.GeometryData.Length}");
+			//Log.Debug($"SkinId={skin.SkinId}");
+			//Log.Debug($"SkinData lenght={skin.Data.Length}");
+			//Log.Debug($"CapeData lenght={skin.Cape.Data.Length}");
+			//Log.Debug("\n" + HexDump(skin.Cape.Data));
+			//Log.Debug($"SkinGeometryName={skin.GeometryName}");
+			//Log.Debug($"SkinGeometry lenght={skin.GeometryData.Length}");
 
 			return skin;
 		}
@@ -1619,8 +1685,6 @@ namespace MiNET.Net
 			var recipes = new Recipes();
 
 			int count = (int) ReadUnsignedVarInt();
-
-			Log.Error($"Reading {count} recipes");
 
 			for (int i = 0; i < count; i++)
 			{
@@ -1803,7 +1867,7 @@ namespace MiNET.Net
 
 		public void Write(PotionContainerChangeRecipe[] recipes)
 		{
-
+			WriteSignedVarInt(0);
 		}
 
 		public PotionContainerChangeRecipe[] ReadPotionContainerChangeRecipes()
@@ -1825,7 +1889,7 @@ namespace MiNET.Net
 
 		public void Write(PotionTypeRecipe[] recipes)
 		{
-
+			WriteSignedVarInt(0);
 		}
 
 		public PotionTypeRecipe[] ReadPotionTypeRecipes()
@@ -1855,7 +1919,7 @@ namespace MiNET.Net
 			WriteSignedVarLong(map.MapId);
 			WriteUnsignedVarInt((uint) map.UpdateType);
 			Write((byte) 0); // dimension
-			Write(false);  // Locked
+			Write(false); // Locked
 
 			//if ((map.UpdateType & BITFLAG_ENTITY_UPDATE) == BITFLAG_ENTITY_UPDATE)
 			//{
@@ -1961,7 +2025,7 @@ namespace MiNET.Net
 							// entity
 							var q = ReadSignedVarLong();
 						}
-						else if(type == 1)
+						else if (type == 1)
 						{
 							// block
 							var b = ReadBlockCoordinates();
@@ -2192,41 +2256,8 @@ namespace MiNET.Net
 
 		public bool CanRead()
 		{
-			return _reader.BaseStream.Position < _reader.BaseStream.Length;
+			return _reader.Position < _reader.Length;
 		}
-
-		protected virtual void EncodePacket()
-		{
-			_buffer.Position = 0;
-			Write(Id); //TODO: If MCPE write varint
-			//if (IsMcpe) Write((short) 0);
-		}
-
-		public virtual void Reset()
-		{
-			ResetPacket();
-			DatagramSequenceNumber = -1;
-
-			Reliability = Reliability.Unreliable;
-			ReliableMessageNumber = -1;
-			OrderingChannel = 0;
-			OrderingIndex = -1;
-
-			NoBatch = false;
-			ForceClear = false;
-
-			_encodedMessage = null;
-			_writer.Flush();
-			_buffer.SetLength(0);
-			_buffer.Position = 0;
-			_timer.Restart();
-			_isEncoded = false;
-		}
-
-		protected virtual void ResetPacket()
-		{
-		}
-
 
 		public void SetEncodedMessage(byte[] encodedMessage)
 		{
@@ -2234,7 +2265,36 @@ namespace MiNET.Net
 			_isEncoded = true;
 		}
 
+		public virtual void Reset()
+		{
+			ResetPacket();
+
+			ReliabilityHeader = new ReliabilityHeader();
+
+			NoBatch = false;
+			ForceClear = false;
+
+			_encodedMessage = null;
+			Bytes = null;
+			Timer.Restart();
+			_isEncoded = false;
+
+			_writer?.Close();
+			_reader?.Close();
+			_buffer?.Close();
+			_writer = null;
+			_reader = null;
+			_buffer = null;
+		}
+
+		protected virtual void ResetPacket()
+		{
+		}
+
 		private object _encodeSync = new object();
+
+		private static RecyclableMemoryStreamManager _streamManager = new RecyclableMemoryStreamManager();
+		private static ConcurrentDictionary<Type, bool> _isLob = new ConcurrentDictionary<Type, bool>();
 
 		public virtual byte[] Encode()
 		{
@@ -2244,65 +2304,94 @@ namespace MiNET.Net
 
 				_isEncoded = false;
 
-				EncodePacket();
+				// Dynamic pooling. If this packet has been registered as a large object in previous
+				// runs, we use the pooled stream for it instead to avoid LOB allocations
+				bool isLob = _isLob.ContainsKey(GetType());
+				_buffer = isLob ? _streamManager.GetStream() : new MemoryStream();
+				using (_writer = new BinaryWriter(_buffer, Encoding.UTF8, true))
+				{
+					EncodePacket();
 
-				_writer.Flush();
-				_buffer.Position = 0;
-				_encodedMessage = _buffer.ToArray();
-				_isEncoded = true;
+					_writer.Flush();
+					// This WILL allocate LOB. Need to convert this to work with array segment and pool it.
+					// then we will use GetBuffer instead.
+					// Also remember to move dispose entirely to Reset (dispose) when that happens.
+					var buffer = (MemoryStream) _buffer;
+					_encodedMessage = buffer.ToArray();
+					if (!isLob && _encodedMessage.Length >= 85_000)
+					{
+						_isLob.TryAdd(GetType(), true);
+						//Log.Warn($"LOB {GetType().Name} {_encodedMessage.Length}, IsLOB={_isLob}");
+					}
+					//else if (isLob && _encodedMessage.Length < 85_000)
+					//{
+					//	if (GetType() != typeof(McpeWrapper)) Log.Warn($"Marked as LOB {GetType().Name} but size was not LOB {_encodedMessage.Length}");
+					//}
+					_isEncoded = true;
+
+					//ResetPacket();
+
+					//_writer.Dispose();
+					//_buffer.Dispose();
+					//_writer = null;
+					//_buffer = null;
+				}
+				_buffer.Dispose();
+
+				_writer = null;
+				_buffer = null;
+
 				return _encodedMessage;
 			}
 		}
 
-		protected virtual void DecodePacket()
+		protected virtual void EncodePacket()
 		{
 			_buffer.Position = 0;
-			if (!IsMcpe) Id = ReadByte();
-			//if (IsMcpe) ReadShort();
+			Write(Id); //TODO: If MCPE write varint
+			//if (IsMcpe) Write((short) 0);
 		}
 
+		[Obsolete("Use decode with ReadOnlyMemory<byte> instead.")]
 		public virtual void Decode(byte[] buffer)
 		{
+			Decode(new ReadOnlyMemory<byte>(buffer));
+		}
+
+		public virtual void Decode(ReadOnlyMemory<byte> buffer)
+		{
 			Bytes = buffer;
-			_buffer.Position = 0;
-			_buffer.SetLength(buffer.Length);
-			_buffer.Write(buffer, 0, buffer.Length);
-			_buffer.Position = 0;
+			_reader = new MemoryStreamReader(buffer);
+
 			DecodePacket();
-			if (Log.IsDebugEnabled && _buffer.Position != (buffer.Length))
+
+			if (Log.IsDebugEnabled && _reader.Position != (buffer.Length))
 			{
-				Log.Warn($"{GetType().Name}: Still have {buffer.Length - _buffer.Position} bytes to read!!\n{HexDump(buffer)}");
+				Log.Warn($"{GetType().Name}: Still have {buffer.Length - _reader.Position} bytes to read!!\n{HexDump(buffer.ToArray())}");
 			}
+
+			_reader.Dispose();
+			_reader = null;
 		}
 
-		public void CloneReset()
+		protected virtual void DecodePacket()
 		{
-			_buffer = new MemoryStream();
-			_reader = new BinaryReader(_buffer);
-			_writer = new BinaryWriter(_buffer);
-			Timer.Start();
-		}
-
-		public virtual object Clone()
-		{
-			Packet clone = (Packet) MemberwiseClone();
-			clone.CloneReset();
-			return clone;
-		}
-
-		public virtual T Clone<T>() where T : Packet
-		{
-			return (T) Clone();
+			if (!IsMcpe) Id = ReadByte();
 		}
 
 		public abstract void PutPool();
 
-		public static string HexDump(byte[] bytes, int bytesPerLine = 16, bool printLineCount = false)
+		public static string HexDump(ReadOnlyMemory<byte> bytes, int bytesPerLine = 16, bool printLineCount = false)
 		{
-			StringBuilder sb = new StringBuilder();
+			return HexDump(bytes.Span, bytesPerLine, printLineCount);
+		}
+
+		private static string HexDump(ReadOnlySpan<byte> bytes, in int bytesPerLine, in bool printLineCount)
+		{
+			var sb = new StringBuilder();
 			for (int line = 0; line < bytes.Length; line += bytesPerLine)
 			{
-				byte[] lineBytes = bytes.Skip(line).Take(bytesPerLine).ToArray();
+				byte[] lineBytes = bytes.Slice(line).ToArray().Take(bytesPerLine).ToArray();
 				if (printLineCount) sb.AppendFormat("{0:x8} ", line);
 				sb.Append(string.Join(" ", lineBytes.Select(b => b.ToString("x2"))
 						.ToArray())
@@ -2320,7 +2409,6 @@ namespace MiNET.Net
 			var jsonSerializerSettings = new JsonSerializerSettings
 			{
 				PreserveReferencesHandling = PreserveReferencesHandling.Arrays,
-
 				Formatting = Formatting.Indented,
 			};
 			jsonSerializerSettings.Converters.Add(new NbtIntConverter());
@@ -2333,7 +2421,7 @@ namespace MiNET.Net
 	}
 
 	/// Base package class
-	public abstract partial class Packet<T> : Packet, ICloneable where T : Packet<T>, new()
+	public abstract partial class Packet<T> : Packet, IDisposable where T : Packet<T>, new()
 	{
 		private static readonly ILog Log = LogManager.GetLogger(typeof(Packet<T>));
 
@@ -2369,7 +2457,7 @@ namespace MiNET.Net
 		{
 			if (_isPermanent) return (T) this;
 
-			if (!_isPooled) throw new Exception("Tried to referenc count a non pooled item");
+			if (!_isPooled) throw new Exception("Tried to reference count a non pooled item");
 			Interlocked.Add(ref _referenceCounter, numberOfReferences);
 
 			return (T) this;
@@ -2395,36 +2483,29 @@ namespace MiNET.Net
 
 		public static T CreateObject(long numberOfReferences = 1)
 		{
-			var item = Pool.GetObject();
+			T item = Pool.GetObject();
 			item._isPooled = true;
 			item._referenceCounter = numberOfReferences;
 			item.Timer.Restart();
 			return item;
 		}
 
-		//static Package()
+		// DO NOT UNCOMMENT THIS!!!
+		// It will have > 100% performance impact overall.
+		//~Packet()
 		//{
-		//	for (int i = 0; i < 100; i++)
+		//	if (_isPooled)
 		//	{
-		//		Pool.PutObject(Pool.GetObject());
+		//		//Log.Error($"Unexpected dispose 0x{Id:x2} {GetType().Name}, IsPooled={_isPooled}, IsPermanent={_isPermanent}, Refs={_referenceCounter}");
 		//	}
 		//}
-
-
-		~Packet()
-		{
-			if (_isPooled)
-			{
-				//Log.Error($"Unexpected dispose 0x{Id:x2} {GetType().Name}, IsPooled={_isPooled}, IsPermanent={_isPermanent}, Refs={_referenceCounter}");
-			}
-		}
 
 		public override void PutPool()
 		{
 			if (_isPermanent) return;
 			if (!IsPooled) return;
 
-			var counter = Interlocked.Decrement(ref _referenceCounter);
+			long counter = Interlocked.Decrement(ref _referenceCounter);
 			if (counter > 0) return;
 
 			if (counter < 0)
@@ -2437,12 +2518,12 @@ namespace MiNET.Net
 
 			_isPooled = false;
 
-			Pool.PutObject((T) this);
+			//Pool.PutObject((T) this);
 		}
 
-		public static int PoolSize()
+		public void Dispose()
 		{
-			return Pool.Size;
+			PutPool();
 		}
 	}
 }
